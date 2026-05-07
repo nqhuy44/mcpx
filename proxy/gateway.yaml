@@ -6,6 +6,32 @@ servers:
   - name: git
     transport: stdio
     binary: mcpx-git
-  # - name: cicd
-  #   transport: http
-  #   address: http://localhost:8081
+
+  - name: code
+    transport: stdio
+    binary: mcpx-code
+    # disabled: true   # set true to disable at startup (can toggle from admin /ui)
+    env:
+      OLLAMA_URL: http://localhost:11434
+      OLLAMA_MODEL: qwen2.5-coder:7b   # swap to any pulled model, e.g.:
+      #   qwen2.5-coder:14b              — higher quality, ~8 GB
+      #   gemma4:e4b-it-bf16             — Google Gemma 4, 128K context
+      #   deepseek-coder:6.7b            — strong on Python/TS
+      #   codellama:7b                   — Meta, good general code
+      # OLLAMA_TEMPERATURE: "0.2"       # 0.0–1.0, lower = more deterministic
+      # OLLAMA_TOP_P: "0.9"             # nucleus sampling
+      # OLLAMA_TOP_K: "40"              # token candidate pool
+      # OLLAMA_NUM_CTX: "16384"         # context window (gemma4 supports 131072)
+
+  # - name: debug
+  #   transport: stdio
+  #   binary: mcpx-debug
+  # - name: scribe
+  #   transport: stdio
+  #   binary: mcpx-scribe
+  # - name: test
+  #   transport: stdio
+  #   binary: mcpx-test
+  # - name: api
+  #   transport: stdio
+  #   binary: mcpx-api

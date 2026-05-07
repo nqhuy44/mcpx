@@ -7,11 +7,13 @@ import (
 )
 
 type ServerConfig struct {
-	Name      string `mapstructure:"name"`
-	Transport string `mapstructure:"transport"`
-	Binary    string `mapstructure:"binary"`
-	Address   string `mapstructure:"address"`
-	ConfigDir string `mapstructure:"-"` // populated at load time, not from yaml
+	Name      string            `mapstructure:"name"`
+	Transport string            `mapstructure:"transport"`
+	Binary    string            `mapstructure:"binary"`
+	Address   string            `mapstructure:"address"`
+	Env       map[string]string `mapstructure:"env"`
+	Disabled  bool              `mapstructure:"disabled"`
+	ConfigDir string            `mapstructure:"-"` // populated at load time, not from yaml
 }
 
 type Config struct {

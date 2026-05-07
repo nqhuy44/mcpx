@@ -8,45 +8,53 @@ Each server is an independent binary following the registry-based dispatch patte
 
 ## 1. Git Server (`servers/git`)
 
+**Category**: Git / PR Management  
 **Language**: Go  
-**Purpose**: All version control operations — GitHub, GitLab, Gitea.
-
-### Exposed Tools (Generic Verbs)
-
-| Tool | Description |
-|---|---|
-| `git_get` | Get a resource: pr, commit, branch, file, diff, review_comment |
-| `git_list` | List resources: prs, commits, branches, files_changed, reviews |
-| `git_create` | Create: pr, branch, comment, review |
-| `git_update` | Update: pr status, labels, assignees |
-| `git_search` | Search: code, commits, issues, prs |
-
-### Token Optimization
-
-- PR responses strip: author metadata, commit arrays, CI status details, emoji reactions
-- Return only: title, description, consolidated diff (max 200 lines), inline comments with line refs
-- `git_get pr` returns ~400 tokens vs. ~8,000 tokens raw from GitHub API
-- `git_list commits` returns hash + subject + author only — no full message body, no GPG data
-
-### Key Skills
-
-- Draft PR description from diff
-- Find all files changed by a given author in the last N days
-- Summarize what a PR does (condensed diff → LEAN payload)
-- Detect merge conflicts preemptively
-
----
-
-## 2. CI/CD Server (`servers/cicd`)
-
-**Language**: Go  
-**Purpose**: Pipeline status, log analysis, failure triage across GitHub Actions, Jenkins, GitLab CI.
+**Status**: Implemented  
+**Purpose**: Local git CLI operations and GitHub PR lifecycle — pre-filtering all output to return only actionable fields.
 
 ### Exposed Tools
 
 | Tool | Description |
 |---|---|
-| `cicd_analyze` | Analyze a pipeline/job failure — returns only error context |
+| `git_status` | Working tree status — staged, unstaged, untracked files |
+| `git_log` | Commit history; filterable by author, path, date. Returns hash (8 chars), date, author, subject |
+| `git_diff` | Diff working tree, staged changes, or a commit range. Supports `--stat` summary mode |
+| `git_branch` | List, create, or delete local branches via `action` param |
+| `git_show` | Details of a single commit: message, author, date, changed-file summary |
+| `git_blame` | Annotate file lines with author + commit. Supports line range |
+| `github_pr_list` | List PRs — number, title, author, state, branch, labels, date |
+| `github_pr_get` | Full PR details: body (truncated 500 chars), diff stats, mergeable status |
+| `github_pr_comment` | Post a comment on a PR or issue |
+
+### Token Optimization
+
+- `git_log` strips to 8-char hash + date + author + subject — no body, no GPG, no metadata
+- `github_pr_list` returns ~80 tokens per PR vs ~2,000 tokens raw from GitHub API
+- `github_pr_get` truncates PR body to 500 chars; strips author metadata, reactions, CI detail arrays
+- `git_diff` defaults to `--stat` (file-level summary) — full diff only on explicit request
+
+### Key Skills
+
+- Show what changed in the last N commits
+- Summarize what a PR does from its diff
+- Find all files touched by an author this week
+- Detect which commit introduced a bug (`git_blame` + `git_show`)
+
+---
+
+## 2. CI/CD Server (`servers/cicd`)
+
+**Category**: CI/CD Pipeline  
+**Language**: Go  
+**Status**: Planned  
+**Purpose**: Pipeline status, log analysis, and failure triage across GitHub Actions, GitLab CI, Jenkins.
+
+### Exposed Tools
+
+| Tool | Description |
+|---|---|
+| `cicd_analyze` | Analyze a pipeline/job failure — returns only error context, not full logs |
 | `cicd_get` | Get pipeline/run/job status |
 | `cicd_list` | List recent runs, failed jobs, flaky tests |
 | `cicd_trigger` | Trigger a pipeline or re-run a job |
@@ -56,7 +64,7 @@ Each server is an independent binary following the registry-based dispatch patte
 
 - `cicd_analyze` downloads full logs server-side, extracts only: stack traces, error lines, 10 lines of pre-failure context
 - Discards: timestamps, build progress lines, successful step outputs, dependency download logs
-- Typical reduction: 50,000 token log → 300-500 token failure summary
+- Typical reduction: 50,000 token log → 300–500 token failure summary
 
 ### Key Skills
 
@@ -68,44 +76,87 @@ Each server is an independent binary following the registry-based dispatch patte
 
 ## 3. Codebase Indexer (`servers/codebase`)
 
+**Category**: Codebase Indexer  
 **Language**: Go  
-**Purpose**: Semantic navigation of source code. Replaces blind `grep`/`find` loops.
+**Status**: `mcpx-code` Implemented · `mcpx-api` Planned  
+**Purpose**: Static analysis, AST navigation, symbol resolution, and API schema parsing — no LLM required for lookups.
+
+### 3a. Code Intelligence (`mcpx-code`)
+
+| Tool | Description | LLM? |
+|---|---|---|
+| `code_search` | Full-text search across a repo. Returns file:line matches | no |
+| `code_find` | Locate a symbol (function, type, var) by name. Returns definition + signature + preview | no |
+| `code_callers` | List all call sites of a function | no |
+| `code_deps` | Import list for a file or package. Supports Go and Python | no |
+| `code_explain` | Explain a file:line range in plain English via Ollama | yes |
+| `code_diff_review` | Review a diff for code smells or correctness issues via Ollama | yes |
+
+**Ollama model**: auto-detected from running instance via `/api/ps` — no config needed if a model is already loaded. Override with `OLLAMA_MODEL` in the server's `env:` block. See [mcpx-code.md](servers/mcpx-code.md) for full configuration.
+
+### 3b. API Intelligence (`mcpx-api`)
+
+| Tool | Description |
+|---|---|
+| `api_list` | List all endpoints in a spec or codebase. Returns method, path, summary, auth |
+| `api_get` | Full details of one endpoint: params, request body, response schemas |
+| `api_search` | Search endpoints by keyword (path, tag, description) |
+| `api_diff` | Compare two spec versions — breaking vs non-breaking changes |
+| `api_gen` | Generate curl example, Go client snippet, or mock handler via Ollama |
+| `api_validate` | Validate a request/response payload against an endpoint's schema |
+
+### Token Optimization
+
+- Symbol lookups return: signature + 5 lines of body + caller list — not full file contents
+- `code_search` replaces 20–40 sequential `grep` + `read` calls with 1–2 tool calls
+- `api_list` returns ~50 tokens per endpoint vs ~800 tokens raw from an OpenAPI spec
+
+### Key Skills
+
+- "Where is X defined and who calls it?" → `code_find` + `code_callers`
+- "What files change if I modify this interface?" → `code_deps`
+- "Did this API release introduce breaking changes?" → `api_diff`
+- "Generate a curl example for this endpoint" → `api_gen`
+
+---
+
+## 4. Codebase Intelligence (`servers/debug`)
+
+**Category**: Codebase Intelligence  
+**Language**: Go  
+**Status**: Planned (see [mcpx-debug](servers/mcpx-debug.md))  
+**Purpose**: Runtime and static analysis that requires contextual understanding — uses local Ollama for diagnosis and explanation.
 
 ### Exposed Tools
 
 | Tool | Description |
 |---|---|
-| `code_search` | Semantic search: find symbol, function, type, usage by name or natural language |
-| `code_get` | Get a specific symbol with its full context (signature, imports, callers, callees) |
-| `code_list` | List: files in a module, all implementations of an interface, all usages of a function |
-| `code_graph` | Get dependency graph for a symbol, file, or module |
-| `code_index` | Trigger re-indexing of a path |
-
-### How It Works
-
-- Builds AST-based index on first run, incremental updates on file change
-- Stores: symbol → file, line, type, imports, callers, callees
-- `code_search` uses embedding similarity over symbol names and docstrings (local embedding model, not cloud)
-- Returns structured graph payload, not raw file contents
+| `debug_error` | Analyze an error + stack trace. Returns: root cause, file:line, suggested fix |
+| `debug_logs` | Triage a log snippet — strip noise, surface anomalies |
+| `debug_test` | Analyze failing test output — which assertion failed, why, what to change |
+| `debug_diff` | Explain what broke in a before/after diff and why |
+| `debug_explain` | Explain a specific file+line range in plain terms |
 
 ### Token Optimization
 
-- Never returns full file contents unless explicitly asked via `code_get file`
-- Function lookup returns: signature + 5 lines of body + list of callers + list of dependencies
-- Replaces 20-40 sequential `grep` + `read` tool calls with 1-2 `code_search` + `code_get` calls
+- Stack frames from vendor paths, stdlib, and runtime internals are stripped before the Ollama call
+- Only ±20 lines around each relevant frame are injected as source context
+- Output is structured (cause / location / fix / confidence) — never raw Ollama response
 
 ### Key Skills
 
-- "Where is X defined and who calls it?" → single `code_get` call
-- "What files would I need to change to modify this interface?" → `code_graph`
-- "Find all usages of this deprecated function" → `code_search`
+- "Why is this panic happening?" → `debug_error` with stack trace + repo path
+- "What's wrong with this log output?" → `debug_logs`
+- "Why did this test start failing after my change?" → `debug_diff`
 
 ---
 
-## 4. Exec Sandbox (`servers/exec`)
+## 5. Exec Sandbox (`servers/exec`)
 
+**Category**: Exec Sandbox  
 **Language**: Go  
-**Purpose**: Run code or scripts server-side and return only the final output.
+**Status**: Planned  
+**Purpose**: Run code or scripts server-side in isolation and return only the final output.
 
 ### Exposed Tools
 
@@ -119,8 +170,7 @@ Each server is an independent binary following the registry-based dispatch patte
 
 - Each execution gets an ephemeral container or seccomp-isolated process
 - The LLM writes a script that does all intermediate processing (API calls, data joins, filtering)
-- Only the final return value reaches the LLM context
-- Collapses N sequential tool calls into 1 LLM turn
+- Only the final return value reaches the LLM context — collapses N sequential tool calls into 1 turn
 
 ### Security Constraints
 
@@ -137,9 +187,11 @@ Each server is an independent binary following the registry-based dispatch patte
 
 ---
 
-## 5. Infrastructure / K8s Server (`servers/infra`)
+## 6. Infrastructure / K8s Server (`servers/infra`)
 
+**Category**: Infrastructure / K8s  
 **Language**: Go  
+**Status**: Planned  
 **Purpose**: Cloud infrastructure telemetry, Kubernetes operations, alert triage.
 
 ### Exposed Tools
@@ -150,13 +202,13 @@ Each server is an independent binary following the registry-based dispatch patte
 | `infra_list` | List: pods by namespace, unhealthy nodes, active alerts, recent events |
 | `infra_analyze` | Analyze: cluster health, alert root cause, resource pressure |
 | `infra_apply` | Apply: scale deployment, restart pod, patch config |
-| `infra_search` | Search: events, logs (via Loki/CloudWatch), metrics (via Prometheus) |
+| `infra_search` | Search: events, logs (Loki/CloudWatch), metrics (Prometheus) |
 
 ### Token Optimization
 
-- `infra_analyze alert` aggregates across multiple monitoring workspaces server-side
+- `infra_analyze alert` aggregates across multiple monitoring sources server-side
 - Returns: affected service, probable cause, relevant metric window — not raw Prometheus JSON
-- Pod list strips: managed fields, internal annotations, full container spec; returns name + status + restart count + age
+- Pod list strips managed fields, internal annotations, full container spec; returns name + status + restart count + age
 
 ### Key Skills
 
@@ -166,50 +218,65 @@ Each server is an independent binary following the registry-based dispatch patte
 
 ---
 
-## 6. Local LLM Router (`servers/llm`)
+## 7. Local LLM Router (`servers/llm`)
 
-**Language**: Python  
-**Purpose**: Wrap a local inference engine (Ollama/llama.cpp) as an MCP server. Enables the cloud model to delegate subtasks to a free local model.
+**Category**: Local LLM Router  
+**Language**: Go (Ollama HTTP client) / Python (if native ML libs needed)  
+**Status**: Planned (see [mcpx-scribe](servers/mcpx-scribe.md), [mcpx-test](servers/mcpx-test.md))  
+**Purpose**: Delegate generation tasks to a local Ollama model — keeping token-heavy generation out of the cloud LLM context.
 
-### Exposed Tools
+### 7a. Documentation Generation (`mcpx-scribe`)
 
 | Tool | Description |
 |---|---|
-| `llm_summarize` | Summarize a large text block locally |
-| `llm_generate` | Generate code, tests, or scripts locally |
-| `llm_embed` | Generate embeddings for semantic search |
-| `llm_classify` | Classify intent, error type, or sentiment |
-| `llm_extract` | Extract structured fields from unstructured text |
+| `scribe_generate` | Generate a doc comment for a function, type, or file |
+| `scribe_update` | Detect and rewrite stale doc comments in a file. Returns a diff |
+| `scribe_readme` | Generate or update a README section from source code |
+| `scribe_search` | Search documentation across a repo by natural-language query |
+| `scribe_coverage` | Report which exported symbols in a package lack doc comments |
 
-### Design
+### 7b. Test Generation (`mcpx-test`)
 
-- Backed by Ollama HTTP API (local) or llama.cpp server
-- Model selection is per-tool based on task type (see [local-models.md](local-models.md))
-- The cloud LLM calls these tools the same way it calls any other MCP tool
-- Responses are formatted as LEAN before being returned to the cloud context
+| Tool | Description |
+|---|---|
+| `test_generate` | Generate unit tests for a function or file, matching repo style |
+| `test_gaps` | Identify untested branches and edge cases — returns descriptions, not code |
+| `test_analyze` | Parse test failure output and explain what failed and why |
+| `test_coverage` | Parse a coverage report and surface highest-value uncovered lines |
+| `test_mock` | Generate mock/stub code for an interface or dependency |
+
+### Token Optimization
+
+- Ollama prompts are kept under 1,200 tokens — only the target symbol is sent, not the full file
+- `scribe_update` uses `git blame` to detect staleness before calling Ollama — avoids unnecessary LLM calls
+- `test_gaps` uses static branch analysis first; Ollama only called for complex logic (>50 branches)
+- Generated code is returned raw (no markdown fences, no explanation) — ready to write to disk
 
 ### Key Skills
 
-- Summarize a 10,000-line log file without using cloud tokens
-- Generate 50 unit tests for a module locally
-- Produce embeddings for codebase-server's semantic index
+- Generate doc comments for all undocumented exports in a package
+- Detect and rewrite doc comments that no longer match the implementation
+- Generate table-driven tests matching the repo's existing style
+- Identify the highest-value untested code paths without running the test suite
 
 ---
 
-## 7. System Server (`servers/system`)
+## 8. System Server (`servers/system`)
 
-**Language**: Go
-**Purpose**: Direct host access — directory tree navigation and shell command execution on the local machine. Not sandboxed. This is for trusted developer use, not for running LLM-generated code (that belongs in the exec sandbox).
+**Category**: System  
+**Language**: Go  
+**Status**: Planned  
+**Purpose**: Direct host access — directory tree navigation and shell command execution on the local machine. Not sandboxed. For trusted developer use, not for running LLM-generated code (that belongs in the exec sandbox).
 
 ### Exec Sandbox vs. System Server
 
-| | Exec Sandbox (`servers/exec`) | System Server (`servers/system`) |
+| | Exec Sandbox | System Server |
 |---|---|---|
 | **Trust level** | Untrusted (LLM-written code) | Trusted (developer-directed) |
 | **Isolation** | Ephemeral container / seccomp | Direct host process |
 | **Filesystem** | `/tmp/workspace` only | Configurable allowed paths |
 | **Network** | Blocked by default | Host network |
-| **Use case** | Agent runs arbitrary scripts | Agent navigates repo, runs `make`, `go test`, etc. |
+| **Use case** | Agent runs arbitrary scripts | Agent runs `make`, `go test`, navigates repo |
 
 ### Exposed Tools
 
@@ -217,154 +284,22 @@ Each server is an independent binary following the registry-based dispatch patte
 |---|---|
 | `sys_tree` | List directory tree with depth/filter control |
 | `sys_run` | Run a shell command on the host and return stdout/stderr |
-| `sys_read` | Read a file (with line range support) |
+| `sys_read` | Read a file with line range support |
 | `sys_write` | Write or append to a file |
 | `sys_find` | Find files by name pattern or content grep |
 | `sys_env` | Read environment variables (allowlisted keys only) |
 
-### `sys_tree` — Directory Tree
+### Security Constraints
 
-Returns a compact tree of a directory. Never returns file contents — only structure.
-
-```json
-{
-  "tool": "sys_tree",
-  "arguments": {
-    "path": "./servers/git",
-    "depth": 3,
-    "include": ["*.go", "*.yaml"],
-    "exclude": ["vendor", "node_modules", ".git", "*.pb.go"]
-  }
-}
-```
-
-**Output (LEAN)**:
-```
-@tree path=servers/git depth=3
-servers/git/
-├── main.go
-├── handler/
-│   ├── get.go
-│   ├── list.go
-│   └── create.go
-├── registry/
-│   └── resources.go
-└── config.yaml
-files: 6  dirs: 2
-```
-
-Token optimization rules:
-- Default `depth: 3` — never unlimited recursion
-- Default excludes: `vendor/`, `node_modules/`, `.git/`, `dist/`, `*.pb.go`, `*_generated.go`
-- File counts replace contents at max depth
-- Never list hidden files unless `show_hidden: true` is explicit
-
-### `sys_run` — Shell Command
-
-Runs a single shell command on the host. Returns stdout + stderr + exit code.
-
-```json
-{
-  "tool": "sys_run",
-  "arguments": {
-    "cmd": "go test ./... -run TestLEANEncoder -v",
-    "cwd": "/home/user/mcpx",
-    "timeout_sec": 30
-  }
-}
-```
-
-**Output (LEAN)**:
-```
-@cmd_result
-exit: 0
-duration: 2.3s
-stdout:
-  === RUN   TestLEANEncoder
-  --- PASS: TestLEANEncoder (0.00s)
-  PASS
-  ok   github.com/nqhuy44/mcpx/libs/lean/go  2.341s
-stderr: (empty)
-```
-
-**Security constraints**:
-- Command allowlist configured in `system.yaml` (by default: `go`, `cargo`, `python`, `npm`, `make`, `git`, `docker`, `kubectl`, `grep`, `find`, `cat`, `ls`, `curl`)
-- Blocked by default: `rm -rf`, `sudo`, `chmod 777`, pipe to shell (`| sh`, `| bash`)
+- Command allowlist in `system.yaml` (default: `go`, `make`, `git`, `docker`, `kubectl`, `grep`, `find`, `cat`, `ls`, `curl`, `jq`)
+- Blocked patterns: `rm -rf`, `sudo`, `chmod 777`, pipe to shell (`| sh`, `| bash`)
 - Working directory must be within configured `allowed_paths`
-- Hard timeout: 120s maximum regardless of input
-- Output truncated at 8,000 characters (tail kept if truncated)
-
-**Configuration (`servers/system/system.yaml`)**:
-```yaml
-allowed_paths:
-  - ~/projects
-  - /tmp/mcpx-workspace
-
-allowed_commands:
-  - go
-  - cargo
-  - python3
-  - make
-  - git
-  - docker
-  - kubectl
-  - npm
-  - pnpm
-  - grep
-  - find
-  - cat
-  - ls
-  - curl
-  - jq
-
-blocked_patterns:
-  - "rm -rf"
-  - "| sh"
-  - "| bash"
-  - "> /dev/sd"
-  - "sudo"
-
-max_output_chars: 8000
-default_timeout_sec: 30
-max_timeout_sec: 120
-```
-
-### `sys_find` — Find Files
-
-Combines `find` + `grep` into a single filtered call. Avoids the agent making multiple sequential shell calls to locate files.
-
-```json
-{
-  "tool": "sys_find",
-  "arguments": {
-    "path": ".",
-    "name": "*.go",
-    "contains": "func.*Encode",
-    "exclude_dirs": ["vendor", "testdata"]
-  }
-}
-```
-
-**Output (TOON)**:
-```
-[File|count=4]
-path,size,modified
-libs/lean/go/encoder.go,3.2KB,2026-05-06
-libs/lean/go/encoder_test.go,1.8KB,2026-05-06
-libs/toon/go/encoder.go,2.9KB,2026-05-04
-proxy/internal/metrics/tokens.go,1.1KB,2026-05-03
-```
-
-### Key Skills This Enables
-
-- Agent runs `go build`, `make test`, `cargo check` and sees real output without blind tool chaining
-- Agent maps an unfamiliar repo with `sys_tree` before deciding which files to read
-- Agent searches for a pattern across files with `sys_find` in one call instead of five `grep` calls
-- Agent checks what's running with `sys_run ps aux | grep mcpx` without leaving the MCP interface
+- Output truncated at 8,000 characters
+- Hard timeout: 120s maximum
 
 ---
 
-## 8. Search & Discovery Meta-Tool (built into proxy)
+## 9. Search & Discovery Meta-Tool (built into proxy)
 
 Not a separate server — implemented in the proxy gateway.
 
@@ -372,19 +307,36 @@ Not a separate server — implemented in the proxy gateway.
 |---|---|
 | `search_tools` | Semantic search over all available tools across all servers |
 
-On session start, only `search_tools` is injected into the LLM context. When the agent calls it with a natural language query, the proxy embeds the query, finds the top 2-3 matching tools, and returns their full schemas for that turn only.
+On session start, only `search_tools` is injected into the LLM context. When the agent calls it with a natural language query, the proxy finds the top 2–3 matching tools and returns their full schemas for that turn only.
 
 This single tool replaces the 17,000+ tokens of upfront schema loading that a naive MCP setup would consume.
 
 ---
 
-## Planned / Future Servers
+## Summary
 
-| Server | Language | Purpose |
-|---|---|---|
-| `servers/docs` | Go | Search internal wikis, Notion, Confluence, README files |
-| `servers/secrets` | Go | Vault / AWS Secrets Manager lookup (read-only) |
-| `servers/db` | Go | Schema inspection, read-only queries, migration status |
-| `servers/notify` | Go | Send Slack messages, create tickets (Jira/Linear) |
+| Server | Category | Language | Status |
+|---|---|---|---|
+| `mcpx-git` | Git / PR Management | Go | **Implemented** |
+| `mcpx-cicd` | CI/CD Pipeline | Go | Planned |
+| `mcpx-code` | Codebase Indexer | Go | **Implemented** |
+| `mcpx-api` | Codebase Indexer | Go | Planned |
+| `mcpx-debug` | Codebase Intelligence | Go | Planned |
+| `mcpx-exec` | Exec Sandbox | Go | Planned |
+| `mcpx-infra` | Infrastructure / K8s | Go | Planned |
+| `mcpx-scribe` | Local LLM Router | Go | Planned |
+| `mcpx-test` | Local LLM Router | Go | Planned |
+| `mcpx-system` | System | Go | Planned |
 
-External-server-backed skills (filesystem, browser, Postgres, Slack, Sentry, etc.) are documented in [external-skills.md](external-skills.md) — those don't require building a server.
+---
+
+## Future / External
+
+| Server | Purpose |
+|---|---|
+| `servers/docs` | Search internal wikis, Notion, Confluence, README files |
+| `servers/secrets` | Vault / AWS Secrets Manager lookup (read-only) |
+| `servers/db` | Schema inspection, read-only queries, migration status |
+| `servers/notify` | Send Slack messages, create tickets (Jira/Linear) |
+
+External-server-backed skills (filesystem, browser, Postgres, Slack, Sentry, etc.) are documented in [external-skills.md](external-skills.md) — those don't require building a new server.

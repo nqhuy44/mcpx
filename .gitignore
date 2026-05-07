@@ -41,6 +41,7 @@ dist/
 
 # Claude Code — ignore local settings overrides but keep commands/
 .claude
+.mcp.json
 
 # OS
 Thumbs.db

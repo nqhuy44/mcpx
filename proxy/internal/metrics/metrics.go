@@ -23,6 +23,12 @@ func (s *ServerStats) SetStatus(status string) {
 	s.mu.Unlock()
 }
 
+func (s *ServerStats) GetStatus() string {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.Status
+}
+
 func (s *ServerStats) RecordCall(tokensIn, tokensOut int64, isError bool) {
 	s.mu.Lock()
 	s.CallCount++

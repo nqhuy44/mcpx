@@ -115,10 +115,34 @@
   .dot.ok         { background: #3fb950; box-shadow: 0 0 6px #3fb95066; }
   .dot.error      { background: #f85149; }
   .dot.connecting { background: #d29922; }
+  .dot.disabled   { background: #484f58; }
 
   .num  { font-variant-numeric: tabular-nums; color: #e6edf3; }
   .dim  { color: #484f58; }
   .err  { color: #f85149; }
+
+  .btn {
+    padding: 3px 10px;
+    border-radius: 5px;
+    font-size: 11px;
+    font-family: inherit;
+    cursor: pointer;
+    border: 1px solid;
+    transition: opacity 0.1s;
+  }
+  .btn:disabled { opacity: 0.4; cursor: default; }
+  .btn-disable {
+    background: transparent;
+    border-color: #30363d;
+    color: #8b949e;
+  }
+  .btn-disable:hover:not(:disabled) { border-color: #f85149; color: #f85149; }
+  .btn-enable {
+    background: transparent;
+    border-color: #238636;
+    color: #3fb950;
+  }
+  .btn-enable:hover:not(:disabled) { background: #238636; color: #fff; }
 
   footer {
     margin-top: 28px;
@@ -163,6 +187,7 @@
       <th>Tokens In</th>
       <th>Tokens Out</th>
       <th>Last Call</th>
+      <th></th>
     </tr>
   </thead>
   <tbody id="servers-body"></tbody>
@@ -213,9 +238,34 @@ function duration(isoStart) {
   return `${s}s`;
 }
 
-function statusCell(status) {
-  const cls = status === 'ok' ? 'ok' : status === 'connecting' ? 'connecting' : 'error';
-  return `<span class="dot ${cls}"></span>${status}`;
+function statusDotClass(status) {
+  if (status === 'ok')         return 'ok';
+  if (status === 'connecting') return 'connecting';
+  if (status === 'disabled')   return 'disabled';
+  return 'error';
+}
+
+function actionButton(name, status) {
+  if (status === 'disabled') {
+    return `<button class="btn btn-enable" onclick="toggle('${name}','enable',this)">Enable</button>`;
+  }
+  return `<button class="btn btn-disable" onclick="toggle('${name}','disable',this)">Disable</button>`;
+}
+
+async function toggle(name, action, btn) {
+  btn.disabled = true;
+  btn.textContent = action === 'enable' ? 'Enabling…' : 'Disabling…';
+  try {
+    const res = await fetch(`/api/servers/${name}/${action}`, { method: 'POST' });
+    if (!res.ok) {
+      const msg = await res.text();
+      alert(`Failed to ${action} '${name}': ${msg}`);
+    }
+  } catch (e) {
+    alert(`Error: ${e.message}`);
+  }
+  // Refresh immediately to reflect new state
+  await refresh();
 }
 
 async function refresh() {
@@ -230,15 +280,16 @@ async function refresh() {
 
     const servers = data.servers || [];
     document.getElementById('servers-body').innerHTML = servers.length === 0
-      ? '<tr><td colspan="7" class="dim">no domain servers configured</td></tr>'
+      ? '<tr><td colspan="8" class="dim">no domain servers configured</td></tr>'
       : servers.map(s => `<tr>
           <td class="num">${s.name}</td>
-          <td>${statusCell(s.status)}</td>
+          <td><span class="dot ${statusDotClass(s.status)}"></span>${s.status}</td>
           <td class="num">${fmt(s.call_count)}</td>
           <td class="${s.error_count > 0 ? 'err' : 'dim'}">${s.error_count > 0 ? s.error_count : '0'}</td>
           <td class="num">${fmt(s.tokens_in)}</td>
           <td class="num">${fmt(s.tokens_out)}</td>
           <td>${timeAgo(s.last_call_at)}</td>
+          <td>${actionButton(s.name, s.status)}</td>
         </tr>`).join('');
 
     const sessions = data.sessions || [];

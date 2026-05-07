@@ -46,7 +46,7 @@ func main() {
 
 	// Start admin dashboard on a separate port (non-blocking).
 	adminAddr := fmt.Sprintf(":%d", cfg.AdminPort)
-	adminSrv := admin.New(collector)
+	adminSrv := admin.New(collector, gw)
 	go func() {
 		log.Printf("mcpx-proxy admin dashboard: http://localhost%s/ui", adminAddr)
 		if err := http.ListenAndServe(adminAddr, adminSrv.Handler()); err != nil {

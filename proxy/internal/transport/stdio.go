@@ -3,6 +3,7 @@ package transport
 import (
 	"os"
 	"path/filepath"
+	"strings"
 
 	mcpclient "github.com/mark3labs/mcp-go/client"
 	"github.com/nqhuy44/mcpx/proxy/internal/config"
@@ -10,11 +11,32 @@ import (
 
 func newStdioClient(cfg config.ServerConfig) (*baseClient, error) {
 	binary := resolveBinary(cfg.Binary, cfg.ConfigDir)
-	inner, err := mcpclient.NewStdioMCPClient(binary, nil)
+	inner, err := mcpclient.NewStdioMCPClient(binary, mergeEnv(cfg.Env))
 	if err != nil {
 		return nil, err
 	}
 	return &baseClient{inner: inner}, nil
+}
+
+// mergeEnv merges the current process environment with per-server overrides.
+// Returns nil (inherit unchanged) when overrides is empty.
+func mergeEnv(overrides map[string]string) []string {
+	if len(overrides) == 0 {
+		return nil
+	}
+	base := make(map[string]string, len(os.Environ()))
+	for _, e := range os.Environ() {
+		k, v, _ := strings.Cut(e, "=")
+		base[k] = v
+	}
+	for k, v := range overrides {
+		base[k] = v
+	}
+	env := make([]string, 0, len(base))
+	for k, v := range base {
+		env = append(env, k+"="+v)
+	}
+	return env
 }
 
 // resolveBinary turns a relative binary path into an absolute one.
