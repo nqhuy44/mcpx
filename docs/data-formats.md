@@ -258,37 +258,36 @@ func (e *Encoder) Encode(v any) ([]byte, error) {
 
 ## Implementation Notes
 
-### Shared Encoding Libraries
+### Current State
 
-Each language has a `libs/lean/` implementation. All MCP server responses should go through these encoders rather than `json.Marshal` / `json.dumps` / `JSON.stringify`.
+Implemented servers (`mcpx-git`, `mcpx-code`) use hand-written compact text formatters per tool — no shared encoding library yet. The outputs follow TOON principles for lists and LEAN principles for single objects, but are not produced by a formal encoder.
+
+| Tool | Shape | Effective format |
+|---|---|---|
+| `git_log`, `code_search`, `code_callers`, `github_pr_list` | Uniform list | TOON-style (ordered fields, no key repetition per row) |
+| `github_pr_get`, `code_find` | Single object | LEAN-style (compact key:value, one concept per line) |
+| `git_diff`, `code_explain`, `code_diff_review` | Raw text / prose | Plaintext |
+
+### Planned: Shared Encoding Library
+
+A `internal/format` package is planned to centralize LEAN and TOON encoding so all servers use a consistent, tested serializer:
 
 ```go
-// Go — encode a list of pods
-import "github.com/nqhuy44/mcpx/libs/lean/go/lean"
+// planned — not yet implemented
+import "github.com/nqhuy44/mcpx/internal/format"
 
-pods := []Pod{ ... }
-output := lean.EncodeBlocks("pods", pods)  // returns LEAN string
+// LEAN single object
+out := format.LEAN(map[string]any{
+    "number": 42, "title": "fix: auth", "state": "open",
+})
+
+// TOON uniform list
+out := format.TOON(headers, rows)
 ```
 
-```python
-# Python
-from mcpx.libs.lean import encode_blocks
-
-pods = [...]
-output = encode_blocks("pods", pods)
-```
-
-```rust
-// Rust
-use mcpx_lean::encode_toon;
-
-let pods: Vec<Pod> = vec![...];
-let output = encode_toon(&pods);
-```
+Until that library exists, prefer the decision tree below when writing new tool handlers.
 
 ### Format Selection Helper
-
-When the response structure is ambiguous, apply this decision tree:
 
 ```
 Is the data a uniform list of same-shaped objects?

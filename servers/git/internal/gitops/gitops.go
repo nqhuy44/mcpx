@@ -168,7 +168,7 @@ func Show(repoDir, ref string) (string, error) {
 	if ref == "" {
 		ref = "HEAD"
 	}
-	out, err := run(repoDir, "show", "--stat", "--format=commit %H%nauthor %an <%ae>%ndate %ad%n%n%s%n%b", "--date=short", ref)
+	out, err := run(repoDir, "show", "--stat", "--format=commit %h%nauthor %an%ndate %ad%n%n%s%n%b", "--date=short", ref)
 	if err != nil {
 		return "", err
 	}

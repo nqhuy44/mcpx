@@ -2,7 +2,6 @@ package main
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"log"
 	"net/http"
@@ -248,24 +247,23 @@ func registerTools(s *mcpserver.MCPServer, gh *github.Client) {
 				mergeable = "no"
 			}
 		}
-		b, _ := json.MarshalIndent(map[string]any{
-			"number":        pr.Number,
-			"title":         pr.Title,
-			"state":         pr.State,
-			"author":        pr.Author,
-			"head":          pr.Head,
-			"base":          pr.Base,
-			"draft":         pr.Draft,
-			"labels":        pr.Labels,
-			"created_at":    pr.CreatedAt,
-			"url":           pr.URL,
-			"body":          pr.Body,
-			"changed_files": pr.ChangedFiles,
-			"additions":     pr.Additions,
-			"deletions":     pr.Deletions,
-			"mergeable":     mergeable,
-		}, "", "  ")
-		return mcp.NewToolResultText(string(b)), nil
+		title := pr.Title
+		if pr.Draft {
+			title += " [draft]"
+		}
+		var sb strings.Builder
+		fmt.Fprintf(&sb, "#%d %s [%s]\n", pr.Number, title, pr.State)
+		fmt.Fprintf(&sb, "author:%s  head:%s→%s  mergeable:%s  created:%s\n",
+			pr.Author, pr.Head, pr.Base, mergeable, pr.CreatedAt)
+		fmt.Fprintf(&sb, "+%d -%d  files:%d", pr.Additions, pr.Deletions, pr.ChangedFiles)
+		if len(pr.Labels) > 0 {
+			fmt.Fprintf(&sb, "  labels:%s", strings.Join(pr.Labels, ","))
+		}
+		fmt.Fprintf(&sb, "\nurl:%s\n", pr.URL)
+		if pr.Body != "" {
+			fmt.Fprintf(&sb, "body: %s\n", pr.Body)
+		}
+		return mcp.NewToolResultText(sb.String()), nil
 	})
 
 	// ── github_pr_comment ─────────────────────────────────────────────────────

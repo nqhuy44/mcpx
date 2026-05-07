@@ -70,10 +70,31 @@ a1b2c3d4  2025-01-10  Jane Doe     fix: nil pointer in gateway init
 f5e6d7c8  2025-01-09  John Smith   feat: add stdio transport
 ```
 
+`git_show`:
+```
+commit a1b2c3d4
+author Jane Doe
+date 2025-01-10
+
+fix: nil pointer in gateway init
+
+ proxy/internal/gateway/gateway.go | 3 ++-
+ 1 file changed, 2 insertions(+), 1 deletion(-)
+```
+
 `github_pr_list`:
 ```
 #42 fix: auth timeout  feature→main  by:jane  2025-01-10
 #41 feat: admin UI [draft]  admin→main  by:john  2025-01-09 labels:wip
+```
+
+`github_pr_get`:
+```
+#42 fix: auth timeout [open]
+author:jane  head:feature→main  mergeable:yes  created:2025-01-10
++84 -12  files:6  labels:bug
+url:https://github.com/owner/repo/pull/42
+body: Fixes the 30-second timeout in the gateway auth middleware…
 ```
 
 `git_blame` (line range):

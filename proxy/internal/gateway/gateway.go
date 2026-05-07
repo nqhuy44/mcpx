@@ -209,14 +209,14 @@ func (g *Gateway) registerPassthrough(s *mcpserver.MCPServer, entry *registry.To
 		}
 
 		argsJSON, _ := json.Marshal(req.GetArguments())
-		tokIn := int64(len(argsJSON)) / 4
+		tokIn := metrics.EstimateTokens(argsJSON)
 
 		result, err := client.CallTool(ctx, toolName, req.GetArguments())
 
 		var tokOut int64
 		if result != nil {
 			out, _ := json.Marshal(result.Content)
-			tokOut = int64(len(out)) / 4
+			tokOut = metrics.EstimateTokens(out)
 		}
 
 		if stats != nil {
