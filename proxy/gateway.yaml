@@ -1,0 +1,11 @@
+transport: stdio
+port: 8080
+admin_port: 9090
+
+servers:
+  - name: git
+    transport: stdio
+    binary: mcpx-git
+  # - name: cicd
+  #   transport: http
+  #   address: http://localhost:8081

@@ -1,0 +1,265 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>mcpx-proxy</title>
+<style>
+  *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+  body {
+    background: #0d1117;
+    color: #e6edf3;
+    font-family: 'SF Mono', 'Menlo', 'Consolas', monospace;
+    font-size: 13px;
+    padding: 24px 32px;
+    min-height: 100vh;
+  }
+
+  header {
+    display: flex;
+    align-items: baseline;
+    gap: 20px;
+    margin-bottom: 28px;
+    padding-bottom: 16px;
+    border-bottom: 1px solid #21262d;
+  }
+
+  header h1 {
+    font-size: 17px;
+    font-weight: 600;
+    color: #58a6ff;
+    letter-spacing: -0.01em;
+  }
+
+  .meta { color: #8b949e; font-size: 12px; }
+  .meta span { color: #c9d1d9; }
+
+  .grid {
+    display: grid;
+    grid-template-columns: repeat(3, 1fr);
+    gap: 12px;
+    margin-bottom: 28px;
+  }
+
+  .card {
+    background: #161b22;
+    border: 1px solid #21262d;
+    border-radius: 8px;
+    padding: 18px 20px;
+  }
+
+  .card .val {
+    font-size: 30px;
+    font-weight: 700;
+    color: #e6edf3;
+    line-height: 1;
+    margin-bottom: 6px;
+    font-variant-numeric: tabular-nums;
+  }
+
+  .card .lbl {
+    font-size: 11px;
+    color: #8b949e;
+    text-transform: uppercase;
+    letter-spacing: 0.07em;
+  }
+
+  h2 {
+    font-size: 11px;
+    font-weight: 600;
+    color: #8b949e;
+    text-transform: uppercase;
+    letter-spacing: 0.09em;
+    margin: 24px 0 10px;
+  }
+
+  table {
+    width: 100%;
+    border-collapse: collapse;
+    background: #161b22;
+    border: 1px solid #21262d;
+    border-radius: 8px;
+    overflow: hidden;
+  }
+
+  th {
+    text-align: left;
+    padding: 8px 14px;
+    font-size: 11px;
+    color: #8b949e;
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+    background: #0d1117;
+    border-bottom: 1px solid #21262d;
+    white-space: nowrap;
+  }
+
+  td {
+    padding: 11px 14px;
+    border-bottom: 1px solid #21262d;
+    color: #c9d1d9;
+    white-space: nowrap;
+  }
+
+  tr:last-child td { border-bottom: none; }
+  tr:hover td { background: #1c2128; }
+
+  .dot {
+    display: inline-block;
+    width: 8px; height: 8px;
+    border-radius: 50%;
+    margin-right: 6px;
+    vertical-align: middle;
+  }
+  .dot.ok         { background: #3fb950; box-shadow: 0 0 6px #3fb95066; }
+  .dot.error      { background: #f85149; }
+  .dot.connecting { background: #d29922; }
+
+  .num  { font-variant-numeric: tabular-nums; color: #e6edf3; }
+  .dim  { color: #484f58; }
+  .err  { color: #f85149; }
+
+  footer {
+    margin-top: 28px;
+    font-size: 11px;
+    color: #30363d;
+    display: flex;
+    justify-content: space-between;
+  }
+</style>
+</head>
+<body>
+
+<header>
+  <h1>mcpx-proxy</h1>
+  <span class="meta">uptime <span id="uptime">—</span></span>
+  <span class="meta" id="refresh-ts"></span>
+</header>
+
+<div class="grid">
+  <div class="card">
+    <div class="val" id="total-calls">—</div>
+    <div class="lbl">Total Calls</div>
+  </div>
+  <div class="card">
+    <div class="val" id="tokens-in">—</div>
+    <div class="lbl">Est. Tokens In</div>
+  </div>
+  <div class="card">
+    <div class="val" id="tokens-out">—</div>
+    <div class="lbl">Est. Tokens Out</div>
+  </div>
+</div>
+
+<h2>Domain Servers</h2>
+<table>
+  <thead>
+    <tr>
+      <th>Server</th>
+      <th>Status</th>
+      <th>Calls</th>
+      <th>Errors</th>
+      <th>Tokens In</th>
+      <th>Tokens Out</th>
+      <th>Last Call</th>
+    </tr>
+  </thead>
+  <tbody id="servers-body"></tbody>
+</table>
+
+<h2>Sessions</h2>
+<table>
+  <thead>
+    <tr>
+      <th>ID</th>
+      <th>Started</th>
+      <th>Calls</th>
+      <th>Duration</th>
+    </tr>
+  </thead>
+  <tbody id="sessions-body"></tbody>
+</table>
+
+<footer>
+  <span>mcpx-proxy dashboard</span>
+  <span>auto-refresh every 3s</span>
+</footer>
+
+<script>
+function fmt(n) {
+  n = n || 0;
+  if (n >= 1e6) return (n / 1e6).toFixed(1) + 'M';
+  if (n >= 1e3) return (n / 1e3).toFixed(1) + 'k';
+  return n.toString();
+}
+
+function timeAgo(iso) {
+  if (!iso || iso.startsWith('0001')) return '<span class="dim">—</span>';
+  const diff = Math.floor((Date.now() - new Date(iso)) / 1000);
+  if (diff < 5)  return 'just now';
+  if (diff < 60) return diff + 's ago';
+  if (diff < 3600) return Math.floor(diff / 60) + 'm ago';
+  return Math.floor(diff / 3600) + 'h ago';
+}
+
+function duration(isoStart) {
+  const secs = Math.floor((Date.now() - new Date(isoStart)) / 1000);
+  const h = Math.floor(secs / 3600);
+  const m = Math.floor((secs % 3600) / 60);
+  const s = secs % 60;
+  if (h > 0) return `${h}h ${m}m`;
+  if (m > 0) return `${m}m ${s}s`;
+  return `${s}s`;
+}
+
+function statusCell(status) {
+  const cls = status === 'ok' ? 'ok' : status === 'connecting' ? 'connecting' : 'error';
+  return `<span class="dot ${cls}"></span>${status}`;
+}
+
+async function refresh() {
+  try {
+    const data = await fetch('/api/status').then(r => r.json());
+
+    document.getElementById('uptime').textContent       = data.uptime;
+    document.getElementById('total-calls').textContent  = fmt(data.total_calls);
+    document.getElementById('tokens-in').textContent    = fmt(data.total_tokens_in);
+    document.getElementById('tokens-out').textContent   = fmt(data.total_tokens_out);
+    document.getElementById('refresh-ts').textContent   = 'refreshed ' + new Date().toLocaleTimeString();
+
+    const servers = data.servers || [];
+    document.getElementById('servers-body').innerHTML = servers.length === 0
+      ? '<tr><td colspan="7" class="dim">no domain servers configured</td></tr>'
+      : servers.map(s => `<tr>
+          <td class="num">${s.name}</td>
+          <td>${statusCell(s.status)}</td>
+          <td class="num">${fmt(s.call_count)}</td>
+          <td class="${s.error_count > 0 ? 'err' : 'dim'}">${s.error_count > 0 ? s.error_count : '0'}</td>
+          <td class="num">${fmt(s.tokens_in)}</td>
+          <td class="num">${fmt(s.tokens_out)}</td>
+          <td>${timeAgo(s.last_call_at)}</td>
+        </tr>`).join('');
+
+    const sessions = data.sessions || [];
+    document.getElementById('sessions-body').innerHTML = sessions.length === 0
+      ? '<tr><td colspan="4" class="dim">no active sessions</td></tr>'
+      : sessions.map(s => `<tr>
+          <td class="num">${s.id.substring(0, 8)}</td>
+          <td class="dim">${new Date(s.start_time).toLocaleTimeString()}</td>
+          <td class="num">${fmt(s.call_count)}</td>
+          <td class="dim">${duration(s.start_time)}</td>
+        </tr>`).join('');
+
+    document.getElementById('refresh-ts').style.color = '#8b949e';
+  } catch (e) {
+    document.getElementById('refresh-ts').textContent = 'connection error';
+    document.getElementById('refresh-ts').style.color = '#f85149';
+  }
+}
+
+setInterval(refresh, 3000);
+refresh();
+</script>
+</body>
+</html>
