@@ -76,7 +76,7 @@ download() {
   cp "$tmp/out/mcpx-proxy${bin_ext}"  "$BIN_DIR/"
   cp "$tmp/out/mcpx-git${bin_ext}"    "$BIN_DIR/"
   cp "$tmp/out/mcpx-code${bin_ext}"   "$BIN_DIR/"
-  cp "$tmp/out/gateway.yaml"          "$INSTALL_DIR/"
+  cp "$tmp/out/gateway.yaml"          "$BIN_DIR/"
   chmod +x \
     "$BIN_DIR/mcpx-proxy${bin_ext}" \
     "$BIN_DIR/mcpx-git${bin_ext}" \
@@ -104,6 +104,22 @@ check_ollama() {
   fi
 }
 
+# ── PATH setup ───────────────────────────────────────────────────────────────
+
+setup_path() {
+  local added=0
+  for rc in "$HOME/.bashrc" "$HOME/.zshrc"; do
+    [ -f "$rc" ] || continue
+    grep -qF "$BIN_DIR" "$rc" && continue
+    printf '\n# mcpx\nexport PATH="$PATH:%s"\n' "$BIN_DIR" >> "$rc"
+    info "added $BIN_DIR to PATH in $rc"
+    added=1
+  done
+  if [ "$added" -eq 1 ]; then
+    warn "restart your shell or run: export PATH=\"\$PATH:$BIN_DIR\""
+  fi
+}
+
 # ── MCP client config injection ───────────────────────────────────────────────
 
 PROXY_BIN="$BIN_DIR/mcpx-proxy"
@@ -128,7 +144,7 @@ inject_json() {
   mkdir -p "$(dirname "$file")"
   if [ -f "$file" ]; then
     local tmp
-    tmp=$(mktemp)
+    tmp=$(mktemp "$(dirname "$file")/.mcpx-XXXXXX")
     jq --argjson new "$(mcp_entry)" \
       '.mcpServers = ((.mcpServers // {}) + $new.mcpServers)' \
       "$file" > "$tmp" && mv "$tmp" "$file"
@@ -253,6 +269,7 @@ main() {
   platform=$(detect_platform)
 
   download "$platform"
+  setup_path
   check_ollama
   configure_claude_code
   configure_antigravity
