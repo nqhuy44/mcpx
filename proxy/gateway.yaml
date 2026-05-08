@@ -13,19 +13,26 @@ servers:
     # disabled: true   # set true to disable at startup (can toggle from admin /ui)
     env:
       OLLAMA_URL: http://localhost:11434
-      OLLAMA_MODEL: qwen2.5-coder:7b   # swap to any pulled model, e.g.:
+      OLLAMA_MODEL: qwen2.5-coder:7b # swap to any pulled model, e.g.:
       #   qwen2.5-coder:14b              — higher quality, ~8 GB
       #   gemma4:e4b-it-bf16             — Google Gemma 4, 128K context
       #   deepseek-coder:6.7b            — strong on Python/TS
       #   codellama:7b                   — Meta, good general code
-      # OLLAMA_TEMPERATURE: "0.2"       # 0.0–1.0, lower = more deterministic
-      # OLLAMA_TOP_P: "0.9"             # nucleus sampling
-      # OLLAMA_TOP_K: "40"              # token candidate pool
+      OLLAMA_TEMPERATURE: "0.2" # 0.0–1.0, lower = more deterministic
+      OLLAMA_TOP_P: "0.95" # nucleus sampling
+      OLLAMA_TOP_K: "64" # token candidate pool
       # OLLAMA_NUM_CTX: "16384"         # context window (gemma4 supports 131072)
 
   - name: exec
     transport: stdio
     binary: mcpx-exec
+
+  - name: infra
+    transport: stdio
+    binary: mcpx-infra
+    # SSH hosts auto-detected from ~/.ssh/config
+    # Kubernetes contexts auto-detected from ~/.kube/config
+    # No env needed for basic use. Run infra_targets to see what was discovered.
 
   # - name: debug
   #   transport: stdio

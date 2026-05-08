@@ -61,7 +61,7 @@ Cluster state, resource telemetry, and deployment health.
 
 | Server | Description | Status |
 |---|---|---|
-| mcpx-infra | Pod status, events, resource usage, Helm release diffs (Kubernetes + cloud) | Planned |
+| [mcpx-infra](mcpx-infra.md) | Docker containers, systemd services, disk, processes — local or SSH remote VM | **Implemented** |
 
 ---
 

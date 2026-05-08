@@ -1,249 +1,77 @@
 # Skills
 
-Skills are higher-level, composable workflows that orchestrate multiple MCP server tools + prompt logic to accomplish a complete engineering task. They sit above the tool layer.
+Skills are pre-built routing guides that tell the LLM exactly which tools to call for a given type of task. They are implemented as MCP Prompts registered by the proxy — any MCP client that supports `prompts/list` can invoke them as slash commands.
 
-## Skills vs. MCP Servers
+## How skills work
 
-| | MCP Servers | Skills |
+When a skill is invoked, the proxy injects a short routing guide into the LLM context. The guide tells the model:
+- Which tool(s) to call first
+- What order to chain them in
+- How to interpret and summarize the results
+
+The LLM does not need to figure out the tool routing itself — the skill does that ahead of time.
+
+## Invoking skills
+
+Skills are registered as MCP Prompts named `mcpx_<name>`. All accept an optional `request` argument.
+
+| Skill | MCP Prompt (all clients) | Claude Code alias |
 |---|---|---|
-| **What** | Atomic tools (get, list, analyze) | Multi-step workflows |
-| **Who calls them** | The LLM, one tool at a time | The agent, as a single intent |
-| **State** | Stateless | Can hold intermediate state |
-| **Examples** | `git_get pr`, `cicd_analyze` | "Review this PR", "Debug the pipeline" |
-| **Implementation** | Go/Rust/Python binary | YAML workflow + prompt templates |
+| Git operations | `/mcpx_git <request>` | `/mcpx:git <request>` |
+| GitHub PRs | `/mcpx_pr <request>` | `/mcpx:pr <request>` |
+| Code search / navigation | `/mcpx_code <request>` | `/mcpx:code <request>` |
+| Code execution | `/mcpx_exec <request>` | `/mcpx:exec <request>` |
+| Infrastructure | `/mcpx_infra <request>` | `/mcpx:infra <request>` |
+| Working tree diff | `/mcpx_diff <request>` | `/mcpx:diff <request>` |
+| Git blame | `/mcpx_blame <request>` | `/mcpx:blame <request>` |
+| Branch management | `/mcpx_branch <request>` | `/mcpx:branch <request>` |
 
-An analogy: MCP servers are functions; skills are programs built from those functions.
+MCP Prompt invocation works in Claude Code, Cursor, Windsurf, VS Code Copilot, Google Antigravity, and Zed — any client that calls `prompts/list` on connect.
 
-## Directory Layout
+The Claude Code aliases (`/mcpx:*`) come from `commands/mcpx/` in this repo. Copy them to enable:
 
-```
-skills/
-├── README.md
-├── _templates/                  # Reusable prompt fragments
-│   ├── system-base.md
-│   ├── code-reviewer.md
-│   └── devops-analyst.md
-│
-├── review-pr/
-│   ├── skill.yaml               # Skill definition
-│   └── prompts/
-│       ├── summarize-diff.md
-│       └── generate-review.md
-│
-├── debug-pipeline/
-│   ├── skill.yaml
-│   └── prompts/
-│       └── triage-failure.md
-│
-├── refactor-module/
-│   ├── skill.yaml
-│   └── prompts/
-│
-├── release-notes/
-│   ├── skill.yaml
-│   └── prompts/
-│
-├── onboard-codebase/
-│   ├── skill.yaml
-│   └── prompts/
-│
-└── security-audit/
-    ├── skill.yaml
-    └── prompts/
+```bash
+# global (all projects)
+cp -r commands/mcpx ~/.claude/commands/
+
+# project-local
+cp -r commands/mcpx .claude/commands/
 ```
 
-## Skill Definition Format (`skill.yaml`)
+## Skill definitions
 
-```yaml
-name: review-pr
-version: 1.0.0
-description: Full code review for a pull request
-trigger: slash  # slash | auto | webhook
+Skills are defined in `proxy/internal/gateway/skills.go`. Each skill has:
 
-input:
-  - name: pr_number
-    type: integer
-    required: true
-  - name: repo
-    type: string
-    default: current
+| Field | Purpose |
+|---|---|
+| `name` | Becomes `mcpx_<name>` in the prompt registry |
+| `description` | Shown in the client's prompt picker |
+| `guide` | The routing instructions injected into context |
 
-routing:
-  # Which model handles each step
-  local_model: qwen3:14b      # used for summarization steps
-  cloud_model: claude          # used for final review generation
+At runtime the proxy appends the user's `request` argument to the guide before returning it.
 
-steps:
-  - id: fetch_pr
-    tool: git_get
-    args:
-      resource: pr
-      number: "{{ input.pr_number }}"
-      repo: "{{ input.repo }}"
+## Available skills
 
-  - id: fetch_diff
-    tool: git_get
-    args:
-      resource: pr_diff
-      number: "{{ input.pr_number }}"
+### `mcpx_git` / `/mcpx:git`
+Git operations on the current repo. Routes to `git_status`, `git_log`, `git_diff`, `git_show` in the right order depending on the request type.
 
-  - id: find_changed_symbols
-    tool: code_list
-    args:
-      resource: changed_symbols
-      files: "{{ steps.fetch_diff.files_changed }}"
+### `mcpx_pr` / `/mcpx:pr`
+GitHub pull request workflows. Routes to `github_pr_list`, `github_pr_get`, `github_pr_comment`. Infers owner/repo from the git remote.
 
-  - id: check_ci
-    tool: cicd_get
-    args:
-      resource: pr_status
-      pr: "{{ input.pr_number }}"
+### `mcpx_code` / `/mcpx:code`
+Code search and navigation. Routes to `code_find`, `code_search`, `code_callers`, `code_deps`, `code_explain`, `code_diff_review` based on the request phrasing. Handles chaining (find → explain) automatically.
 
-  - id: summarize_diff
-    model: local          # run on local model, save cloud tokens
-    prompt: prompts/summarize-diff.md
-    input:
-      diff: "{{ steps.fetch_diff.output }}"
-      symbols: "{{ steps.find_changed_symbols.output }}"
+### `mcpx_exec` / `/mcpx:exec`
+Execute a code snippet or shell command. Prefers `exec_run` over the native shell for large-output commands (find, grep, ps, df, docker ps) to avoid token flooding.
 
-  - id: generate_review
-    model: cloud
-    prompt: prompts/generate-review.md
-    input:
-      pr: "{{ steps.fetch_pr.output }}"
-      summary: "{{ steps.summarize_diff.output }}"
-      ci_status: "{{ steps.check_ci.output }}"
+### `mcpx_infra` / `/mcpx:infra`
+Infrastructure queries. Routes to `infra_containers`, `infra_services`, `infra_pods`, `infra_disk`, `infra_processes`, etc. Calls `infra_targets` first when a named VM or cluster is referenced.
 
-output:
-  format: lean
-  value: "{{ steps.generate_review.output }}"
-```
+### `mcpx_diff` / `/mcpx:diff`
+Explain what changed in the working tree or between commits. Calls `git_diff(stat=true)` first, then per-file diffs, then summarizes.
 
-## Skill Implementation Options
+### `mcpx_blame` / `/mcpx:blame`
+Annotate specific lines with author, date, and commit context. Calls `git_blame` then `git_show` for interesting commits.
 
-Skills can be surfaced in three ways depending on the use case:
-
-### 1. Claude Code Slash Commands (simplest)
-
-For skills that are invoked interactively during development. Stored in `.claude/commands/`:
-
-```
-.claude/commands/
-├── review-pr.md        → /review-pr
-├── debug-pipeline.md   → /debug-pipeline
-└── release-notes.md    → /release-notes
-```
-
-Each `.md` file contains the full prompt + instructions. The agent reads it and executes the tool calls described. No code needed — just well-structured prompts that reference the MCP tools.
-
-Use this for: personal/team developer workflows.
-
-### 2. Orchestrator MCP Server (`servers/orchestrator`)
-
-A dedicated MCP server that exposes skills as tools. The proxy routes `skill_*` tool calls to this server, which then calls other domain servers internally and sequences the steps.
-
-```
-cloud LLM
-  └──calls──► skill_review_pr
-                  │
-                  ├──► git-server (fetch PR, diff)
-                  ├──► codebase-server (changed symbols)
-                  ├──► cicd-server (CI status)
-                  └──► llm-server (local summarization)
-                          │
-                          └── returns composed review
-```
-
-Use this for: headless agent pipelines, webhook-triggered automation.
-
-### 3. Webhook / Scheduled Trigger
-
-Skills can be triggered by external events (PR opened, pipeline failed, deploy finished) without any LLM interaction. The orchestrator server receives the webhook, executes the skill, and posts results back (GitHub comment, Slack, Jira ticket).
-
-```yaml
-trigger: webhook
-on:
-  event: pr.opened
-  source: github
-action: post_review_comment
-```
-
-## Planned Skills
-
-### `review-pr`
-Full pull request review: fetches diff, identifies changed symbols and their callers, checks CI status, runs summarization locally, generates detailed review with cloud model.
-
-**Steps**: `git_get` → `code_list` → `cicd_get` → local summarize → cloud review  
-**Token strategy**: local model handles diff summarization (heavy); cloud handles final synthesis (light)
-
----
-
-### `debug-pipeline`
-CI/CD failure triage: analyzes the failed job log, finds the failing test/line, searches the codebase for context, suggests a fix.
-
-**Steps**: `cicd_analyze` → `code_search` → `code_get` → cloud suggest fix  
-**Token strategy**: `cicd_analyze` strips 50K log to ~300 tokens before any LLM sees it
-
----
-
-### `release-notes`
-Generates release notes from all PRs merged since the last tag. Clusters changes by type (feature, fix, infra), links issues.
-
-**Steps**: `git_list commits` → `git_list prs` → local cluster → cloud draft  
-**Token strategy**: local model groups/clusters; cloud only writes prose
-
----
-
-### `onboard-codebase`
-Gives a new developer (or a new agent session) a structured orientation to an unfamiliar repository: entry points, key modules, dependency graph, recent change hotspots.
-
-**Steps**: `code_graph root` → `git_list commits` → cloud synthesize overview  
-**Output**: LEAN-formatted codebase map
-
----
-
-### `refactor-module`
-Safe, step-by-step refactoring: identifies all usages of a symbol, checks for tests, generates the refactored version, shows a diff preview.
-
-**Steps**: `code_get` → `code_list usages` → `exec_run tests` → cloud refactor → `git_create branch`
-
----
-
-### `security-audit`
-Reviews recent changes for common vulnerabilities: injection, auth gaps, secrets exposure, dependency issues.
-
-**Steps**: `git_get diff` → `code_graph affected` → cloud audit  
-**Note**: always routes to cloud model (security reasoning is high-complexity)
-
----
-
-### `standup-summary`
-Generates a daily standup summary: what was committed, what PRs are open, what CI failures are blocking.
-
-**Steps**: `git_list commits` → `cicd_list failed` → `git_list prs open` → local summarize  
-**Token strategy**: entirely local model — no cloud needed for this task
-
-## Prompt Template Conventions
-
-All skill prompts follow these rules:
-
-1. **System prompt** references `_templates/system-base.md` for shared persona/constraints
-2. **Input data** is always passed as LEAN or TOON — never raw JSON
-3. **Output format** is explicitly specified at the end of every prompt
-4. **Model routing instructions** are in `skill.yaml`, not in the prompt itself (prompts are model-agnostic)
-
-```markdown
-<!-- prompts/summarize-diff.md -->
-You are analyzing a code diff for a pull request review.
-
-## Changed Code
-{{ input.summary_lean }}
-
-## Task
-Identify:
-- The primary intent of this change (1 sentence)
-- Any potential side effects on callers
-- Missing test coverage for edge cases
-
-Output format: LEAN blocks with keys: intent, side_effects[], missing_tests[]
-```
+### `mcpx_branch` / `/mcpx:branch`
+List, create, or delete branches via `git_branch`. Notes that checkout requires the user to run `git checkout` directly.

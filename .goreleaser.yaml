@@ -45,9 +45,20 @@ builds:
     flags: [-trimpath]
     ldflags: ["-s -w"]
 
+  - id: infra
+    dir: servers/infra
+    main: ./cmd
+    binary: mcpx-infra
+    env:
+      - CGO_ENABLED=0
+    goos: [linux, darwin, windows]
+    goarch: [amd64, arm64]
+    flags: [-trimpath]
+    ldflags: ["-s -w"]
+
 archives:
   - id: bundle
-    builds: [proxy, git, code, exec]
+    builds: [proxy, git, code, exec, infra]
     name_template: "mcpx_{{ .Version }}_{{ .Os }}_{{ .Arch }}"
     format: tar.gz
     format_overrides:
@@ -56,6 +67,9 @@ archives:
     files:
       - src: proxy/gateway.yaml
         dst: gateway.yaml
+      - src: commands/mcpx/**
+        dst: commands/mcpx/
+        strip_parent: true
 
 checksum:
   name_template: "mcpx_{{ .Version }}_checksums.txt"

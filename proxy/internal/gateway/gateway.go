@@ -151,13 +151,59 @@ func (g *Gateway) EnableServer(ctx context.Context, name string) error {
 func (g *Gateway) BuildMCPServer() *mcpserver.MCPServer {
 	s := mcpserver.NewMCPServer("mcpx-proxy", "0.1.0",
 		mcpserver.WithToolCapabilities(false),
+		mcpserver.WithPromptCapabilities(false),
 	)
 
-	searchTool := mcp.NewTool("search_tools",
-		mcp.WithDescription("Search available tools by keyword. Returns top-3 matches with name, description, and input schema."),
+	// ── meta tools ────────────────────────────────────────────────────────────
+
+	s.AddTool(mcp.NewTool("search_tools",
+		mcp.WithDescription("Search available tools by keyword. Returns top-3 matches with name, description, and input schema. Call this first when unsure which tool to use."),
 		mcp.WithString("query", mcp.Required(), mcp.Description("Keywords to search for")),
-	)
-	s.AddTool(searchTool, g.handleSearchTools)
+	), g.handleSearchTools)
+
+	s.AddTool(mcp.NewTool("mcpx_guide",
+		mcp.WithDescription("Returns a concise routing guide: which mcpx tool to call for each type of developer task. Call this once at session start so you know when to use tools proactively."),
+	), func(_ context.Context, _ mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+		return mcp.NewToolResultText(usageGuide(g.reg.All())), nil
+	})
+
+	// ── MCP Prompts ──────────────────────────────────────────────────────────
+	// mcpx_usage: auto-injected session context by clients that call prompts/list
+
+	s.AddPrompt(mcp.NewPrompt("mcpx_usage",
+		mcp.WithPromptDescription("System context for mcpx: explains when to call each tool proactively. Clients that support MCP prompts should inject this at session start."),
+	), func(_ context.Context, _ mcp.GetPromptRequest) (*mcp.GetPromptResult, error) {
+		return mcp.NewGetPromptResult(
+			"mcpx tool usage guide",
+			[]mcp.PromptMessage{
+				mcp.NewPromptMessage(
+					mcp.RoleUser,
+					mcp.NewTextContent(usageGuide(g.reg.All())),
+				),
+			},
+		), nil
+	})
+
+	// per-skill prompts: invokable as slash commands in any client that supports prompts
+	// e.g. /mcpx_git, /mcpx_infra, /mcpx_code — each accepts an optional "request" argument
+
+	for _, sk := range skills() {
+		sk := sk
+		s.AddPrompt(mcp.NewPrompt("mcpx_"+sk.name,
+			mcp.WithPromptDescription(sk.description),
+			mcp.WithArgument("request", mcp.ArgumentDescription("What to do")),
+		), func(_ context.Context, req mcp.GetPromptRequest) (*mcp.GetPromptResult, error) {
+			body := sk.guide
+			if r := req.Params.Arguments["request"]; r != "" {
+				body += "\n\nUser request: " + r
+			}
+			return mcp.NewGetPromptResult(sk.description, []mcp.PromptMessage{
+				mcp.NewPromptMessage(mcp.RoleUser, mcp.NewTextContent(body)),
+			}), nil
+		})
+	}
+
+	// ── domain tool passthroughs ──────────────────────────────────────────────
 
 	for _, entry := range g.reg.All() {
 		g.registerPassthrough(s, entry)
@@ -165,6 +211,49 @@ func (g *Gateway) BuildMCPServer() *mcpserver.MCPServer {
 
 	g.mcpSrv = s
 	return s
+}
+
+// usageGuide builds a compact routing table from the live tool registry.
+// It is used by both the mcpx_guide tool and the mcpx_usage prompt.
+func usageGuide(entries []*registry.ToolEntry) string {
+	// group tools by server
+	byServer := make(map[string][]string)
+	var order []string
+	for _, e := range entries {
+		if _, seen := byServer[e.ServerName]; !seen {
+			order = append(order, e.ServerName)
+		}
+		byServer[e.ServerName] = append(byServer[e.ServerName], e.Name)
+	}
+
+	var sb strings.Builder
+	sb.WriteString("# mcpx tool guide\n\n")
+	sb.WriteString("Use these tools proactively — prefer them over asking the user to run commands.\n\n")
+
+	// static routing hints per server
+	hints := map[string]string{
+		"git":   "commits, branches, diffs, blame, PRs — any git or GitHub question",
+		"code":  "symbol lookup, callers, imports, code explanation — any 'where is X' or 'explain this' question",
+		"exec":  "run/test a code snippet — any 'run this', 'what does this output', 'verify this' request",
+		"infra": "Docker containers, systemd services, disk usage, processes — any VM or server health question",
+	}
+
+	for _, srv := range order {
+		tools := byServer[srv]
+		hint := hints[srv]
+		if hint == "" {
+			hint = "see tool descriptions"
+		}
+		fmt.Fprintf(&sb, "## %s\nUse when: %s\nTools: %s\n\n", srv, hint, strings.Join(tools, ", "))
+	}
+
+	sb.WriteString("## discovery\n")
+	sb.WriteString("Use when: unsure which tool fits\n")
+	sb.WriteString("Tools: search_tools(query), mcpx_guide\n\n")
+	sb.WriteString("---\n")
+	sb.WriteString("Rule: call search_tools(query) any time you are unsure. Never ask the user to run a command if a tool can do it.\n")
+
+	return sb.String()
 }
 
 func (g *Gateway) handleSearchTools(_ context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {

@@ -12,7 +12,8 @@ mcpx-proxy  (stdio)
     │
     ├── mcpx-git    (git + GitHub PR tools)
     ├── mcpx-code   (symbol search, AST nav, dependency graph, code explanation)
-    └── mcpx-exec   (sandboxed code execution — python, js, bash, go, ruby, php)
+    ├── mcpx-exec   (sandboxed code execution — python, js, bash, go, ruby, php)
+    └── mcpx-infra  (Docker containers, systemd services, disk, processes — local or SSH)
 ```
 
 Each domain server is a static Go binary communicating over stdio. No Docker required for local use.
@@ -144,6 +145,26 @@ Supported languages: `python`, `javascript`/`node`, `bash`, `go`, `ruby`, `php`.
 
 Runs in an isolated temp directory with a configurable timeout (1–60s). Output is capped at 8 KB per stream to prevent token flooding.
 
+### Infrastructure (`mcpx-infra`)
+
+| Tool | Description |
+|---|---|
+| `infra_targets` | List all auto-detected targets (local, SSH hosts, Kubernetes contexts) |
+| `infra_containers` | List Docker containers — status, image, ports |
+| `infra_container_logs` | Container logs, with optional error-only filtering |
+| `infra_container_stats` | One-shot CPU/memory snapshot for all containers |
+| `infra_compose` | List docker-compose stacks and service status |
+| `infra_services` | List systemd services — load/active/sub state |
+| `infra_service_logs` | Journald logs for a service, with error-only filtering |
+| `infra_disk` | Disk usage by mount point, sorted by usage % |
+| `infra_processes` | Top processes by CPU or memory |
+| `infra_pods` | List Kubernetes pods — status, restarts, age, node |
+| `infra_pod_logs` | Pod logs, with optional error-only filtering |
+| `infra_deployments` | List Kubernetes deployments — ready/desired replicas |
+| `infra_k8s_events` | Kubernetes warning events in a namespace |
+
+Targets are **auto-detected** — SSH hosts from `~/.ssh/config`, Kubernetes contexts from `~/.kube/config`. No extra config needed. Every tool has an optional `target` parameter; omit it to use the local machine (VM tools) or current context (k8s tools).
+
 ## Slash Commands
 
 Pre-built Claude Code slash commands live in `commands/mcpx/`. Copy them into your Claude config to enable `/mcpx:*` shortcuts:
@@ -164,6 +185,8 @@ cp -r commands/mcpx ~/.claude/commands/
 | `/mcpx:blame` | `/mcpx:blame who wrote lines 10-30 in main.go` |
 | `/mcpx:branch` | `/mcpx:branch list branches` |
 | `/mcpx:exec` | `/mcpx:exec run this python snippet` |
+| `/mcpx:code` | `/mcpx:code find function parseConfig` |
+| `/mcpx:infra` | `/mcpx:infra why is the api container crashing on prod-vm` |
 
 ## Configuration
 
@@ -188,6 +211,12 @@ servers:
   - name: exec
     transport: stdio
     binary: mcpx-exec
+
+  - name: infra
+    transport: stdio
+    binary: mcpx-infra
+    # No env needed — SSH hosts auto-detected from ~/.ssh/config,
+    # Kubernetes contexts auto-detected from ~/.kube/config
 ```
 
 ### Per-server `env` block
@@ -235,8 +264,10 @@ To add a new domain server, create `servers/<name>/` with its own `go.mod` and `
 
 | Doc | Description |
 |---|---|
+| [docs/client-setup.md](docs/client-setup.md) | Per-client setup: Claude Code, Cursor, Copilot, Windsurf, Zed, Antigravity |
 | [docs/servers/mcpx-git.md](docs/servers/mcpx-git.md) | Git server — tools, output format, GitHub auth |
 | [docs/servers/mcpx-code.md](docs/servers/mcpx-code.md) | Code server — tools, Ollama setup, language support |
 | [docs/servers/mcpx-exec.md](docs/servers/mcpx-exec.md) | Exec server — sandbox, supported languages, limits |
+| [docs/servers/mcpx-infra.md](docs/servers/mcpx-infra.md) | Infra server — Docker, systemd, disk, SSH remote access |
 | [docs/servers/README.md](docs/servers/README.md) | All servers index with port assignments |
 | [docs/architecture.md](docs/architecture.md) | Architectural decisions and design principles |

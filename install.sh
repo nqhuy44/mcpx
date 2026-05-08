@@ -77,12 +77,19 @@ download() {
   cp "$tmp/out/mcpx-git${bin_ext}"    "$BIN_DIR/"
   cp "$tmp/out/mcpx-code${bin_ext}"   "$BIN_DIR/"
   cp "$tmp/out/mcpx-exec${bin_ext}"   "$BIN_DIR/"
+  cp "$tmp/out/mcpx-infra${bin_ext}"  "$BIN_DIR/"
   cp "$tmp/out/gateway.yaml"          "$BIN_DIR/"
   chmod +x \
     "$BIN_DIR/mcpx-proxy${bin_ext}" \
     "$BIN_DIR/mcpx-git${bin_ext}" \
     "$BIN_DIR/mcpx-code${bin_ext}" \
-    "$BIN_DIR/mcpx-exec${bin_ext}"
+    "$BIN_DIR/mcpx-exec${bin_ext}" \
+    "$BIN_DIR/mcpx-infra${bin_ext}"
+
+  if [ -d "$tmp/out/commands/mcpx" ]; then
+    mkdir -p "$INSTALL_DIR/commands"
+    cp -r "$tmp/out/commands/mcpx" "$INSTALL_DIR/commands/"
+  fi
 
   success "installed to $INSTALL_DIR"
 }
@@ -162,7 +169,18 @@ configure_claude_code() {
       || claude mcp add mcpx "$PROXY_BIN" 2>/dev/null \
       || { warn "claude mcp add failed — add manually (see below)"; return 1; }
     success "Claude Code: registered mcpx"
+    install_claude_commands
   fi
+}
+
+install_claude_commands() {
+  local src="$INSTALL_DIR/commands/mcpx"
+  local dest="$HOME/.claude/commands/mcpx"
+  [ -d "$src" ] || return 0
+  mkdir -p "$HOME/.claude/commands"
+  cp -r "$src" "$HOME/.claude/commands/"
+  success "Claude Code: installed slash commands → $dest"
+  info "  Use /mcpx:git, /mcpx:code, /mcpx:exec, /mcpx:infra, /mcpx:diff, /mcpx:blame, /mcpx:branch, /mcpx:pr"
 }
 
 configure_antigravity() {
@@ -251,6 +269,11 @@ $(mcp_entry)
     Zed                : ~/.config/zed/settings.json
     VS Code            : ~/Library/Application Support/Code/User/settings.json (macOS)
                          ~/.config/Code/User/settings.json (Linux)
+
+  Claude Code slash commands (optional):
+    cp -r ~/.mcpx/commands/mcpx ~/.claude/commands/
+    Enables: /mcpx:git, /mcpx:code, /mcpx:exec, /mcpx:infra, /mcpx:pr, /mcpx:diff, /mcpx:blame, /mcpx:branch
+    (All clients also get /mcpx_git, /mcpx_code, etc. via MCP Prompts — no copy needed)
 
   Ollama (optional, for code_explain + code_diff_review):
     Install : https://ollama.com
