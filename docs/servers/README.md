@@ -26,12 +26,22 @@ Pipeline inspection, build analysis, and test result triage.
 
 ## Codebase Indexer
 
-Static analysis, AST navigation, symbol resolution, and API schema parsing — no LLM required for lookups.
+Static analysis, AST navigation, symbol resolution — no LLM required for lookups.
 
 | Server | Description | Status |
 |---|---|---|
-| [mcpx-code](mcpx-code.md) | Symbol search, AST navigation, dependency graph, call graph | **Implemented** |
+| [mcpx-code](mcpx-code.md) | Symbol search, AST navigation, dependency graph, code explanation via Ollama | **Implemented** |
 | [mcpx-api](mcpx-api.md) | OpenAPI/Swagger parsing, endpoint discovery, breaking change diff | Planned |
+
+---
+
+## Exec Sandbox
+
+Safe code execution without exposing shell access.
+
+| Server | Description | Status |
+|---|---|---|
+| [mcpx-exec](mcpx-exec.md) | Run Python/JS/bash/Go/Ruby/PHP snippets in an isolated temp dir, return stdout + exit code | **Implemented** |
 
 ---
 
@@ -55,16 +65,6 @@ Cluster state, resource telemetry, and deployment health.
 
 ---
 
-## Exec Sandbox
-
-Safe code execution without exposing shell access.
-
-| Server | Description | Status |
-|---|---|---|
-| mcpx-exec | Run Go/Python/JS snippets in an isolated sandbox, return stdout + exit code | Planned |
-
----
-
 ## Local LLM Router
 
 Generation tasks delegated to a local Ollama model — keeps generation out of the cloud LLM context.
@@ -76,16 +76,13 @@ Generation tasks delegated to a local Ollama model — keeps generation out of t
 
 ---
 
-## Port assignments
+## Port assignments (HTTP mode)
 
-| Server | Default port (HTTP mode) |
+| Server | Default port |
 |---|---|
+| mcpx-proxy | 8080 (admin: 9090) |
 | mcpx-git | 8081 |
-| mcpx-debug | 8082 |
 | mcpx-code | 8083 |
-| mcpx-scribe | 8084 |
-| mcpx-test | 8085 |
-| mcpx-api | 8086 |
 | mcpx-cicd | 8087 |
 | mcpx-infra | 8088 |
 | mcpx-exec | 8089 |

@@ -76,11 +76,13 @@ download() {
   cp "$tmp/out/mcpx-proxy${bin_ext}"  "$BIN_DIR/"
   cp "$tmp/out/mcpx-git${bin_ext}"    "$BIN_DIR/"
   cp "$tmp/out/mcpx-code${bin_ext}"   "$BIN_DIR/"
+  cp "$tmp/out/mcpx-exec${bin_ext}"   "$BIN_DIR/"
   cp "$tmp/out/gateway.yaml"          "$BIN_DIR/"
   chmod +x \
     "$BIN_DIR/mcpx-proxy${bin_ext}" \
     "$BIN_DIR/mcpx-git${bin_ext}" \
-    "$BIN_DIR/mcpx-code${bin_ext}"
+    "$BIN_DIR/mcpx-code${bin_ext}" \
+    "$BIN_DIR/mcpx-exec${bin_ext}"
 
   success "installed to $INSTALL_DIR"
 }

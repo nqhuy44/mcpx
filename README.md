@@ -1,17 +1,18 @@
 # mcpx
 
-A centralized platform of domain-specific [Model Context Protocol](https://modelcontextprotocol.io) (MCP) servers for coding and DevOps automation. A single proxy aggregates all domain servers — Claude Code connects to one endpoint and routes tool calls automatically.
+A centralized platform of domain-specific [Model Context Protocol](https://modelcontextprotocol.io) (MCP) servers for coding and DevOps automation. A single proxy aggregates all domain servers — any MCP client connects to one endpoint and routes tool calls automatically.
 
 ## Architecture
 
 ```
-Claude Code (or any MCP client)
+Any MCP client (Claude Code, Cursor, Windsurf, Zed, VS Code, ...)
     │
     ▼
 mcpx-proxy  (stdio)
     │
     ├── mcpx-git    (git + GitHub PR tools)
-    └── mcpx-code   (symbol search, AST nav, dependency graph, code explanation)
+    ├── mcpx-code   (symbol search, AST nav, dependency graph, code explanation)
+    └── mcpx-exec   (sandboxed code execution — python, js, bash, go, ruby, php)
 ```
 
 Each domain server is a static Go binary communicating over stdio. No Docker required for local use.
@@ -51,6 +52,7 @@ make build
 # Build a single component
 make build SERVER=git
 make build SERVER=code
+make build SERVER=exec
 make build SERVER=proxy
 
 # Cross-compile
@@ -64,20 +66,41 @@ bin/
   mcpx-proxy     # aggregation proxy
   mcpx-git       # git + GitHub PR server
   mcpx-code      # codebase indexer + code explanation
+  mcpx-exec      # sandboxed code execution
   gateway.yaml   # proxy config (copied from proxy/gateway.yaml)
 ```
 
-## Register with Claude Code
+## Register with any MCP client
 
+### Claude Code
 ```bash
 claude mcp add mcpx /absolute/path/to/bin/mcpx-proxy
-```
-
-Verify it connected:
-
-```
+# verify:
 /mcp
 ```
+
+### Other clients (Cursor, Windsurf, Zed, VS Code)
+
+Add to your client's MCP config file:
+
+```json
+{
+  "mcpServers": {
+    "mcpx": {
+      "command": "/absolute/path/to/bin/mcpx-proxy"
+    }
+  }
+}
+```
+
+Config file locations:
+
+| Client | Config file |
+|---|---|
+| Cursor | `~/.cursor/mcp.json` |
+| Windsurf | `~/.codeium/windsurf/mcp_config.json` |
+| Zed | `~/.config/zed/settings.json` |
+| VS Code | `~/Library/Application Support/Code/User/settings.json` (macOS) |
 
 ## Available Tools
 
@@ -99,16 +122,27 @@ Set `GITHUB_TOKEN` in `gateway.yaml` (or as an env var) for private repos and hi
 
 ### Code Intelligence (`mcpx-code`)
 
+| Tool | Description | Requires Ollama |
+|---|---|---|
+| `code_search` | Full-text search across a codebase | no |
+| `code_find` | Locate a symbol by name — definition + signature + preview | no |
+| `code_callers` | Find all call sites of a function | no |
+| `code_deps` | Import list for a file or package | no |
+| `code_explain` | Explain a file:line range in plain English | yes |
+| `code_diff_review` | Review a diff for bugs and code smells | yes |
+
+See [docs/servers/mcpx-code.md](docs/servers/mcpx-code.md) for language support and Ollama setup.
+
+### Code Execution (`mcpx-exec`)
+
 | Tool | Description |
 |---|---|
-| `code_search` | Full-text search across a codebase. Returns file:line matches |
-| `code_find` | Locate a symbol (function, type, var) by name. Returns definition + signature + preview |
-| `code_callers` | Find all call sites of a function |
-| `code_deps` | Show import list for a file or package |
-| `code_explain` | Explain a file:line range in plain English (requires Ollama) |
-| `code_diff_review` | Review a diff for bugs and code smells (requires Ollama) |
+| `exec_run` | Run a code snippet — returns stdout, stderr, exit code |
+| `exec_langs` | List runtimes available on this machine |
 
-`code_search`, `code_find`, `code_callers`, `code_deps` work with no Ollama — pure static analysis. See [docs/servers/mcpx-code.md](docs/servers/mcpx-code.md) for language support and configuration.
+Supported languages: `python`, `javascript`/`node`, `bash`, `go`, `ruby`, `php`.
+
+Runs in an isolated temp directory with a configurable timeout (1–60s). Output is capped at 8 KB per stream to prevent token flooding.
 
 ## Slash Commands
 
@@ -129,6 +163,7 @@ cp -r commands/mcpx ~/.claude/commands/
 | `/mcpx:diff` | `/mcpx:diff what changed vs main` |
 | `/mcpx:blame` | `/mcpx:blame who wrote lines 10-30 in main.go` |
 | `/mcpx:branch` | `/mcpx:branch list branches` |
+| `/mcpx:exec` | `/mcpx:exec run this python snippet` |
 
 ## Configuration
 
@@ -147,22 +182,21 @@ servers:
   - name: code
     transport: stdio
     binary: mcpx-code
-    # disabled: true          # start disabled; toggle from admin /ui
     env:
-      # All optional — omit entirely to use defaults
-      # OLLAMA_MODEL auto-detected from running Ollama instance if not set
-      OLLAMA_MODEL: qwen2.5-coder:7b
-      # OLLAMA_NUM_CTX: "131072"      # use for Gemma 4 (128K context)
-      # OLLAMA_TEMPERATURE: "0.2"
+      OLLAMA_MODEL: qwen2.5-coder:7b   # optional — auto-detected if Ollama is running
+
+  - name: exec
+    transport: stdio
+    binary: mcpx-exec
 ```
 
 ### Per-server `env` block
 
-Any key under `env:` is injected into the server process environment, overriding the parent process. This is how Ollama, GitHub tokens, and other server-specific config are set — no need to pollute the global environment.
+Any key under `env:` is injected into the server process environment. This is how Ollama config, GitHub tokens, and other per-server settings are passed without polluting the global environment.
 
 ### `disabled:` flag
 
-Set `disabled: true` on any server in `gateway.yaml` to skip it at startup. Useful when a dependency (Ollama, external API) is not yet available. Disabled servers can be enabled at runtime from the admin dashboard without restarting the proxy.
+Set `disabled: true` on any server to skip it at startup. Can be toggled live from the admin dashboard without restarting the proxy.
 
 ## Admin Dashboard
 
@@ -170,10 +204,9 @@ Available at `http://localhost:9090/ui` when the proxy is running.
 
 - Live call counts, token estimates, error rates per server
 - Per-server status: `ok` · `error` · `connecting` · `disabled`
-- **Enable / Disable toggle** — click to disable a server (kills the subprocess) or re-enable it (re-spawns and reconnects) without restarting the proxy
+- Enable / Disable toggle — restarts a server subprocess without restarting the proxy
 
-API endpoints (used by the UI, also scriptable):
-
+API endpoints:
 ```
 GET  /api/status                    — JSON snapshot of all metrics
 POST /api/servers/{name}/disable    — disable a server
@@ -188,16 +221,15 @@ make lint          # go vet + staticcheck
 make fmt           # gofmt in-place
 
 make test SERVER=git     # test a single module
-make test SERVER=code
+make test SERVER=exec
 ```
 
 To run the proxy standalone (after building):
-
 ```bash
 ./bin/mcpx-proxy
 ```
 
-To add a new domain server, create a `servers/<name>/` directory with its own `go.mod` and `cmd/main.go`. The Makefile picks it up automatically.
+To add a new domain server, create `servers/<name>/` with its own `go.mod` and `cmd/main.go`. The Makefile picks it up automatically.
 
 ## Docs
 
@@ -205,6 +237,6 @@ To add a new domain server, create a `servers/<name>/` directory with its own `g
 |---|---|
 | [docs/servers/mcpx-git.md](docs/servers/mcpx-git.md) | Git server — tools, output format, GitHub auth |
 | [docs/servers/mcpx-code.md](docs/servers/mcpx-code.md) | Code server — tools, Ollama setup, language support |
+| [docs/servers/mcpx-exec.md](docs/servers/mcpx-exec.md) | Exec server — sandbox, supported languages, limits |
 | [docs/servers/README.md](docs/servers/README.md) | All servers index with port assignments |
-| [docs/mcp-servers.md](docs/mcp-servers.md) | Full server catalogue with planned servers |
 | [docs/architecture.md](docs/architecture.md) | Architectural decisions and design principles |

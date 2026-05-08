@@ -23,6 +23,10 @@ servers:
       # OLLAMA_TOP_K: "40"              # token candidate pool
       # OLLAMA_NUM_CTX: "16384"         # context window (gemma4 supports 131072)
 
+  - name: exec
+    transport: stdio
+    binary: mcpx-exec
+
   # - name: debug
   #   transport: stdio
   #   binary: mcpx-debug
