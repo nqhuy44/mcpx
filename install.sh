@@ -57,7 +57,9 @@ download() {
   info "downloading mcpx v${version} (${platform})..."
   local tmp
   tmp=$(mktemp -d)
-  trap 'rm -rf "$tmp"' EXIT
+  # Double-quote to capture value now — single-quote would defer to exit time
+  # when the local scope is gone, causing "unbound variable" under set -u.
+  trap "rm -rf '$tmp'" EXIT
 
   curl -sSfL "$url" -o "$tmp/$archive"
 
@@ -74,6 +76,8 @@ download() {
   [[ "$platform" == windows* ]] && bin_ext=".exe"
 
   for bin in mcpx-proxy mcpx-exec mcpx-debug; do
+    # rm first so we can replace a running binary (avoids "Text file busy")
+    rm -f "$BIN_DIR/${bin}${bin_ext}"
     cp "$tmp/out/${bin}${bin_ext}" "$BIN_DIR/"
     chmod +x "$BIN_DIR/${bin}${bin_ext}"
   done
