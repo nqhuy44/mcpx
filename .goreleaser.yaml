@@ -12,28 +12,6 @@ builds:
     flags: [-trimpath]
     ldflags: ["-s -w"]
 
-  - id: git
-    dir: servers/git
-    main: ./cmd
-    binary: mcpx-git
-    env:
-      - CGO_ENABLED=0
-    goos: [linux, darwin, windows]
-    goarch: [amd64, arm64]
-    flags: [-trimpath]
-    ldflags: ["-s -w"]
-
-  - id: code
-    dir: servers/code
-    main: ./cmd
-    binary: mcpx-code
-    env:
-      - CGO_ENABLED=0
-    goos: [linux, darwin, windows]
-    goarch: [amd64, arm64]
-    flags: [-trimpath]
-    ldflags: ["-s -w"]
-
   - id: exec
     dir: servers/exec
     main: ./cmd
@@ -45,10 +23,10 @@ builds:
     flags: [-trimpath]
     ldflags: ["-s -w"]
 
-  - id: infra
-    dir: servers/infra
+  - id: debug
+    dir: servers/debug
     main: ./cmd
-    binary: mcpx-infra
+    binary: mcpx-debug
     env:
       - CGO_ENABLED=0
     goos: [linux, darwin, windows]
@@ -58,7 +36,7 @@ builds:
 
 archives:
   - id: bundle
-    builds: [proxy, git, code, exec, infra]
+    builds: [proxy, exec, debug]
     name_template: "mcpx_{{ .Version }}_{{ .Os }}_{{ .Arch }}"
     format: tar.gz
     format_overrides:

@@ -19,7 +19,17 @@ jobs:
       - uses: actions/setup-go@v5
         with:
           go-version-file: proxy/go.mod
-          cache: false
+          cache-dependency-path: |
+            proxy/go.sum
+            servers/exec/go.sum
+            servers/debug/go.sum
+
+      - name: test
+        run: |
+          for mod in proxy servers/exec servers/debug; do
+            echo "test $mod"
+            (cd "$mod" && go test ./...)
+          done
 
       - uses: goreleaser/goreleaser-action@v6
         with:

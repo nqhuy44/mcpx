@@ -73,18 +73,11 @@ download() {
   local bin_ext=""
   [[ "$platform" == windows* ]] && bin_ext=".exe"
 
-  cp "$tmp/out/mcpx-proxy${bin_ext}"  "$BIN_DIR/"
-  cp "$tmp/out/mcpx-git${bin_ext}"    "$BIN_DIR/"
-  cp "$tmp/out/mcpx-code${bin_ext}"   "$BIN_DIR/"
-  cp "$tmp/out/mcpx-exec${bin_ext}"   "$BIN_DIR/"
-  cp "$tmp/out/mcpx-infra${bin_ext}"  "$BIN_DIR/"
-  cp "$tmp/out/gateway.yaml"          "$BIN_DIR/"
-  chmod +x \
-    "$BIN_DIR/mcpx-proxy${bin_ext}" \
-    "$BIN_DIR/mcpx-git${bin_ext}" \
-    "$BIN_DIR/mcpx-code${bin_ext}" \
-    "$BIN_DIR/mcpx-exec${bin_ext}" \
-    "$BIN_DIR/mcpx-infra${bin_ext}"
+  for bin in mcpx-proxy mcpx-exec mcpx-debug; do
+    cp "$tmp/out/${bin}${bin_ext}" "$BIN_DIR/"
+    chmod +x "$BIN_DIR/${bin}${bin_ext}"
+  done
+  cp "$tmp/out/gateway.yaml" "$BIN_DIR/"
 
   if [ -d "$tmp/out/commands/mcpx" ]; then
     mkdir -p "$INSTALL_DIR/commands"
@@ -92,25 +85,6 @@ download() {
   fi
 
   success "installed to $INSTALL_DIR"
-}
-
-# ── Ollama check ──────────────────────────────────────────────────────────────
-
-check_ollama() {
-  if command -v ollama &>/dev/null; then
-    local loaded
-    loaded=$(ollama ps 2>/dev/null | tail -n +2 | awk '{print $1}' | head -1)
-    if [ -n "$loaded" ]; then
-      success "Ollama: model '$loaded' is loaded — mcpx-code LLM tools ready"
-    else
-      warn "Ollama found but no model is loaded"
-      warn "  Run: ollama run qwen2.5-coder:7b   (or any code model)"
-      warn "  mcpx-code will auto-detect it on first use"
-    fi
-  else
-    warn "Ollama not installed — mcpx-code static tools (search, find, deps) work without it"
-    warn "  Install Ollama for code_explain + code_diff_review: https://ollama.com"
-  fi
 }
 
 # ── PATH setup ───────────────────────────────────────────────────────────────
@@ -138,8 +112,7 @@ mcp_entry() {
 {
   "mcpServers": {
     "mcpx": {
-      "command": "$PROXY_BIN",
-      "env": { "GITHUB_TOKEN": "${GITHUB_TOKEN:-}" }
+      "command": "$PROXY_BIN"
     }
   }
 }
@@ -180,7 +153,7 @@ install_claude_commands() {
   mkdir -p "$HOME/.claude/commands"
   cp -r "$src" "$HOME/.claude/commands/"
   success "Claude Code: installed slash commands → $dest"
-  info "  Use /mcpx:git, /mcpx:code, /mcpx:exec, /mcpx:infra, /mcpx:diff, /mcpx:blame, /mcpx:branch, /mcpx:pr"
+  info "  Use /mcpx:exec, /mcpx:debug"
 }
 
 configure_antigravity() {
@@ -272,14 +245,8 @@ $(mcp_entry)
 
   Claude Code slash commands (optional):
     cp -r ~/.mcpx/commands/mcpx ~/.claude/commands/
-    Enables: /mcpx:git, /mcpx:code, /mcpx:exec, /mcpx:infra, /mcpx:pr, /mcpx:diff, /mcpx:blame, /mcpx:branch
-    (All clients also get /mcpx_git, /mcpx_code, etc. via MCP Prompts — no copy needed)
-
-  Ollama (optional, for code_explain + code_diff_review):
-    Install : https://ollama.com
-    Pull    : ollama pull qwen2.5-coder:7b
-    Run     : ollama run qwen2.5-coder:7b
-    mcpx-code auto-detects the loaded model — no extra config needed.
+    Enables: /mcpx:exec, /mcpx:debug
+    (All clients also get /mcpx_exec, /mcpx_debug via MCP Prompts — no copy needed)
 
   Admin dashboard (when proxy is running):
     http://localhost:9090/ui
@@ -295,7 +262,6 @@ main() {
 
   download "$platform"
   setup_path
-  check_ollama
   configure_claude_code
   configure_antigravity
   configure_cursor

@@ -12,26 +12,20 @@ mcpx exposes three mechanisms, in order of preference:
 | **`mcpx_guide` tool** | LLM calls this tool at session start to learn the routing table | Any client — the LLM sees the tool description and calls it |
 | **Manual system prompt** | You paste the routing guide into the client's custom instructions | Any client with a system prompt field |
 
-Most clients only need the MCP server registered — the LLM will discover `mcpx_guide` from the tool list and call it. The manual system prompt is a fallback for clients where you want guaranteed proactive behaviour.
+All domain tool schemas stay server-side. The client only receives 3 tool definitions (`call_tool`, `search_tools`, `mcpx_guide`) — ~180 tokens of fixed overhead regardless of how many backend tools exist.
 
 ## Skills (slash commands for any client)
 
-mcpx registers per-server skills as MCP Prompts. Any client that supports `prompts/list` can invoke them as slash commands:
+mcpx registers skills as MCP Prompts. Any client that supports `prompts/list` can invoke them as slash commands:
 
 | Skill | Invoke | What it does |
 |---|---|---|
-| `mcpx_git` | `/mcpx_git show last 5 commits` | Git operations — commits, diffs, blame, log |
-| `mcpx_pr` | `/mcpx_pr list open PRs` | GitHub PR list, review, comment |
-| `mcpx_code` | `/mcpx_code find function parseConfig` | Symbol search, callers, deps, explain |
-| `mcpx_exec` | `/mcpx_exec run this python snippet` | Code execution, large-output shell commands |
-| `mcpx_infra` | `/mcpx_infra why is api crashing on prod-vm` | Containers, services, Kubernetes, disk |
-| `mcpx_diff` | `/mcpx_diff what changed vs main` | Working tree and commit diffs |
-| `mcpx_blame` | `/mcpx_blame who wrote lines 10-30 in main.go` | Annotate file lines with author and commit |
-| `mcpx_branch` | `/mcpx_branch list branches` | List, create, delete branches |
+| `mcpx_exec` | `/mcpx_exec run tests in this project` | Test/build runner with output filtering, code snippets |
+| `mcpx_debug` | `/mcpx_debug analyze this panic` | Stacktrace/panic/log triage — extracts errors, filters noise |
 
-Each skill injects a routing guide into the LLM context telling it exactly which tool to call and in what order — the LLM does not need to figure this out itself.
+Each skill injects a routing guide telling the LLM exactly which `call_tool` call to make.
 
-For Claude Code specifically, identical slash commands are also available in `commands/mcpx/` using the `/mcpx:<name>` syntax (e.g. `/mcpx:git`). Both work; the MCP Prompt versions work in all clients.
+For Claude Code, identical slash commands are also available via `commands/mcpx/` as `/mcpx:exec` and `/mcpx:debug`.
 
 ---
 
@@ -40,8 +34,6 @@ For Claude Code specifically, identical slash commands are also available in `co
 ```bash
 # global (all projects)
 claude mcp add mcpx ~/.mcpx/bin/mcpx-proxy
-
-# or project-local via .mcp.json
 ```
 
 `.mcp.json` (project root):
@@ -55,9 +47,9 @@ claude mcp add mcpx ~/.mcpx/bin/mcpx-proxy
 }
 ```
 
-Claude Code automatically calls `prompts/list` on connect, so `mcpx_usage` is injected into every session. No manual system prompt needed.
+Claude Code automatically calls `prompts/list` on connect, so `mcpx_usage` is injected into every session.
 
-Slash commands — copy `commands/mcpx/` to activate `/mcpx:git`, `/mcpx:exec`, etc.:
+Slash commands:
 ```bash
 cp -r commands/mcpx ~/.claude/commands/
 ```
@@ -80,18 +72,11 @@ Config file: `~/.cursor/mcp.json`
 
 Cursor calls `prompts/list` on connect — `mcpx_usage` is injected automatically.
 
-For guaranteed proactive use, also add to **Cursor → Settings → Rules for AI**:
-
-```
-You have mcpx tools available. Call mcpx_guide once at the start of any coding session to learn which tool to use for git, code search, and code execution tasks. Prefer tools over asking me to run commands.
-```
-
 ---
 
 ## GitHub Copilot (VS Code)
 
-Config file: `~/Library/Application Support/Code/User/settings.json` (macOS)  
-or `~/.config/Code/User/settings.json` (Linux)
+Config file: `~/.config/Code/User/settings.json` (Linux) or `~/Library/Application Support/Code/User/settings.json` (macOS)
 
 ```json
 {
@@ -106,10 +91,10 @@ or `~/.config/Code/User/settings.json` (Linux)
 }
 ```
 
-Add to **VS Code → Settings → GitHub Copilot → Custom Instructions** (or `.github/copilot-instructions.md` in the repo):
+Add to **VS Code → Settings → GitHub Copilot → Custom Instructions**:
 
 ```
-You have mcpx MCP tools available. At the start of a session call mcpx_guide to learn the routing table. Use git_* tools for any git question, code_* for symbol lookup, exec_run to run code snippets. Never ask the user to run a command if a tool can do it.
+You have mcpx MCP tools. Call call_tool(name="exec_run", args={"cmd":"<cmd>","workdir":"<path>","filter":"test"}) to run tests with filtered output. Use mcpx_guide to see all available tools.
 ```
 
 ---
@@ -131,29 +116,7 @@ Config file: `~/.codeium/windsurf/mcp_config.json`
 Add to **Windsurf → Settings → AI Rules**:
 
 ```
-Call mcpx_guide at session start. Use mcpx tools proactively for git, code search, and code execution instead of asking me to run commands.
-```
-
----
-
-## Google Antigravity
-
-Config file: `~/.gemini/antigravity/mcp_config.json`
-
-```json
-{
-  "mcpServers": {
-    "mcpx": {
-      "command": "/home/you/.mcpx/bin/mcpx-proxy"
-    }
-  }
-}
-```
-
-Add to your Antigravity custom instructions:
-
-```
-Call mcpx_guide at session start. Use mcpx tools proactively for git, code search, and code execution instead of asking me to run commands.
+Call mcpx_guide at session start. Use call_tool(name="exec_run",...) with filter=test or filter=build to run project commands with filtered output.
 ```
 
 ---
@@ -174,33 +137,53 @@ Config file: `~/.config/zed/settings.json`
 
 ---
 
+## Google Antigravity
+
+Config file: `~/.gemini/antigravity/mcp_config.json`
+
+```json
+{
+  "mcpServers": {
+    "mcpx": {
+      "command": "/home/you/.mcpx/bin/mcpx-proxy"
+    }
+  }
+}
+```
+
+---
+
 ## Any other client
 
-Add the MCP server using the standard `mcpServers` format with `command` pointing to `mcpx-proxy`.
+```json
+{
+  "mcpServers": {
+    "mcpx": {
+      "command": "/home/you/.mcpx/bin/mcpx-proxy"
+    }
+  }
+}
+```
 
-Then paste this into the client's custom instructions / system prompt field:
+Add to the client's system prompt:
 
 ```
-You have access to mcpx MCP tools for software development tasks.
+You have mcpx MCP tools. Invoke them via call_tool(name="<tool>", args={...}).
 
-At the start of each session, call mcpx_guide to get a routing table showing when to use each tool.
+Key tools:
+- exec_run: run project tests/builds with filtered output
+  call_tool(name="exec_run", args={"cmd":"go test ./...","workdir":"/path","filter":"test"})
+  filter=test returns only failures. filter=build returns only errors.
 
-Short routing rules:
-- git commits / branches / diffs / PRs → git_* and github_pr_* tools
-- find a symbol / understand code / trace callers → code_* tools
-- run or test a code snippet → exec_run
-- unsure which tool → search_tools(query)
-
-Prefer tools over asking the user to run commands manually.
+Call mcpx_guide to see the full routing table.
 ```
 
 ---
 
 ## Verifying the connection
 
-In any client, ask the LLM:
 ```
 call mcpx_guide
 ```
 
-You should get back a routing table listing all connected servers and their tools. If you see it, the server is connected and the LLM knows how to use it.
+You should get back a routing table listing all connected servers and their tools.

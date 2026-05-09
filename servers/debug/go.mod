@@ -1,4 +1,4 @@
-module github.com/nqhuy44/mcpx/servers/git
+module github.com/nqhuy44/mcpx/servers/debug
 
 go 1.23.0
 

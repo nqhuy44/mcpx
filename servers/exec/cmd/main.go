@@ -40,32 +40,61 @@ func main() {
 
 func registerTools(s *mcpserver.MCPServer) {
 	// ── exec_run ──────────────────────────────────────────────────────────────
+	// Two modes:
+	//   cmd mode:  run a shell command in workdir (for project test/build)
+	//   code mode: run a language snippet in a temp dir (for quick scripts)
+	//
+	// filter=test strips passing tests — only failures + summary are returned.
+	// filter=build strips warnings — only error lines are returned.
 	s.AddTool(mcp.NewTool("exec_run",
-		mcp.WithDescription("Execute a code snippet and return stdout/stderr/exit code. Runs in an isolated temp directory. Supported: python, javascript/node, bash, go, ruby, php."),
-		mcp.WithString("language", mcp.Required(),
-			mcp.Description("Runtime: python, javascript, bash, go, ruby, php")),
-		mcp.WithString("code", mcp.Required(),
-			mcp.Description("Source code to execute")),
-		mcp.WithString("stdin",
-			mcp.Description("Data to pass to the program's stdin")),
-		mcp.WithNumber("timeout",
-			mcp.Description("Timeout in seconds, 1–60 (default 10)")),
+		mcp.WithDescription("Run a shell command or code snippet. filter=test|build extracts only failures from verbose output."),
+		mcp.WithString("cmd", mcp.Description("Shell command e.g. 'go test ./...' or 'make build' (runs in workdir)")),
+		mcp.WithString("workdir", mcp.Description("Directory to run cmd in (required for project commands)")),
+		mcp.WithString("code", mcp.Description("Code snippet to run (alternative to cmd, runs in temp dir)")),
+		mcp.WithString("lang", mcp.Description("Snippet language: python|javascript|bash|go|ruby|php")),
+		mcp.WithString("filter", mcp.Description("Output filter: none (default)|test|build")),
+		mcp.WithNumber("timeout", mcp.Description("Timeout seconds 1-60 (default: 30 for cmd, 10 for snippet)")),
+		mcp.WithString("stdin", mcp.Description("Data for stdin (snippet mode only)")),
 	), func(_ context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
-		result, err := sandbox.Run(
-			req.GetString("language", ""),
-			req.GetString("code", ""),
-			req.GetString("stdin", ""),
-			int(req.GetFloat("timeout", 10)),
-		)
+		filter := req.GetString("filter", "none")
+		timeout := int(req.GetFloat("timeout", 0))
+
+		var result *sandbox.Result
+		var err error
+
+		if cmd := req.GetString("cmd", ""); cmd != "" {
+			result, err = sandbox.RunCmd(cmd, req.GetString("workdir", ""), timeout)
+		} else if code := req.GetString("code", ""); code != "" {
+			result, err = sandbox.Run(
+				req.GetString("lang", "bash"),
+				code,
+				req.GetString("stdin", ""),
+				timeout,
+			)
+		} else {
+			return mcp.NewToolResultError("provide either cmd or code"), nil
+		}
+
 		if err != nil {
 			return mcp.NewToolResultError(err.Error()), nil
 		}
-		return mcp.NewToolResultText(formatResult(result)), nil
+
+		var out string
+		switch filter {
+		case "test":
+			out = sandbox.FilterTest(result)
+		case "build":
+			out = sandbox.FilterBuild(result)
+		default:
+			out = formatRaw(result)
+		}
+
+		return mcp.NewToolResultText(out), nil
 	})
 
 	// ── exec_langs ────────────────────────────────────────────────────────────
 	s.AddTool(mcp.NewTool("exec_langs",
-		mcp.WithDescription("List runtimes available on this machine."),
+		mcp.WithDescription("List runtimes available on this machine for snippet execution."),
 	), func(_ context.Context, _ mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 		available := sandbox.AvailableLangs()
 		if len(available) == 0 {
@@ -75,7 +104,7 @@ func registerTools(s *mcpserver.MCPServer) {
 	})
 }
 
-func formatResult(r *sandbox.Result) string {
+func formatRaw(r *sandbox.Result) string {
 	var sb strings.Builder
 	fmt.Fprintf(&sb, "exit:%d\n", r.ExitCode)
 	if r.Stdout != "" {

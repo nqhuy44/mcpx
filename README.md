@@ -1,6 +1,6 @@
 # mcpx
 
-A centralized platform of domain-specific [Model Context Protocol](https://modelcontextprotocol.io) (MCP) servers for coding and DevOps automation. A single proxy aggregates all domain servers — any MCP client connects to one endpoint and routes tool calls automatically.
+MCP proxy for coding automation. A single proxy aggregates domain servers — any MCP client connects to one endpoint and routes tool calls via `call_tool`.
 
 ## Architecture
 
@@ -10,50 +10,32 @@ Any MCP client (Claude Code, Cursor, Windsurf, Zed, VS Code, ...)
     ▼
 mcpx-proxy  (stdio)
     │
-    ├── mcpx-git    (git + GitHub PR tools)
-    ├── mcpx-code   (symbol search, AST nav, dependency graph, code explanation)
-    ├── mcpx-exec   (sandboxed code execution — python, js, bash, go, ruby, php)
-    └── mcpx-infra  (Docker containers, systemd services, disk, processes — local or SSH)
+    ├── mcpx-exec   (test/build output filtering + code snippet execution)
+    └── mcpx-debug  (stacktrace/panic/log triage — extracts errors, filters noise)
 ```
 
-Each domain server is a static Go binary communicating over stdio. No Docker required for local use.
+Each server is a static Go binary over stdio. No Docker required for local use.
 
-## Install (pre-built binary)
+The proxy exposes 3 tools to the client: `call_tool`, `search_tools`, `mcpx_guide`.
+All domain tool schemas are kept server-side — no schema bloat in the LLM context.
+
+## Install
 
 ```bash
 curl -sSL https://raw.githubusercontent.com/nqhuy44/mcpx/main/install.sh | bash
 ```
 
-The script:
-- Detects your OS and architecture
-- Downloads the latest release from GitHub
-- Installs binaries to `~/.mcpx/bin/`
-- Auto-configures any detected MCP clients (Claude Code, Cursor, Windsurf, Zed, VS Code, Google Antigravity)
-- Prints a manual config snippet for everything else
-
-Set `GITHUB_TOKEN` before running to inject it into the config:
-```bash
-GITHUB_TOKEN=ghp_... curl -sSL https://raw.githubusercontent.com/nqhuy44/mcpx/main/install.sh | bash
-```
+The script installs binaries to `~/.mcpx/bin/` and auto-configures any detected MCP clients.
 
 ## Build from source
 
-### Prerequisites
-
-- Go 1.23+
-- `git` in your PATH
-- [Ollama](https://ollama.com) (optional — only needed for `code_explain` and `code_diff_review`)
-
-### Build
-
 ```bash
-# Build all components (proxy + all servers)
+# Build all active servers + proxy
 make build
 
-# Build a single component
-make build SERVER=git
-make build SERVER=code
+# Single component
 make build SERVER=exec
+make build SERVER=debug
 make build SERVER=proxy
 
 # Cross-compile
@@ -65,10 +47,9 @@ Binaries are written to `bin/`:
 ```
 bin/
   mcpx-proxy     # aggregation proxy
-  mcpx-git       # git + GitHub PR server
-  mcpx-code      # codebase indexer + code explanation
-  mcpx-exec      # sandboxed code execution
-  gateway.yaml   # proxy config (copied from proxy/gateway.yaml)
+  mcpx-exec      # test/build runner + code snippet execution
+  mcpx-debug     # stacktrace/panic/log triage
+  gateway.yaml   # proxy config
 ```
 
 ## Register with any MCP client
@@ -76,13 +57,9 @@ bin/
 ### Claude Code
 ```bash
 claude mcp add mcpx /absolute/path/to/bin/mcpx-proxy
-# verify:
-/mcp
 ```
 
 ### Other clients (Cursor, Windsurf, Zed, VS Code)
-
-Add to your client's MCP config file:
 
 ```json
 {
@@ -94,103 +71,62 @@ Add to your client's MCP config file:
 }
 ```
 
-Config file locations:
-
 | Client | Config file |
 |---|---|
 | Cursor | `~/.cursor/mcp.json` |
 | Windsurf | `~/.codeium/windsurf/mcp_config.json` |
 | Zed | `~/.config/zed/settings.json` |
-| VS Code | `~/Library/Application Support/Code/User/settings.json` (macOS) |
+| VS Code | `~/.config/Code/User/settings.json` (Linux) · `~/Library/Application Support/Code/User/settings.json` (macOS) |
 
 ## Available Tools
 
-### Git (`mcpx-git`)
-
-| Tool | Description |
-|---|---|
-| `git_status` | Working tree status — staged, unstaged, untracked |
-| `git_log` | Commit history; filter by author, path, date |
-| `git_diff` | Diff working tree, staged, or a commit range |
-| `git_branch` | List, create, or delete branches |
-| `git_show` | Details of a single commit |
-| `git_blame` | Annotate file lines with author + commit |
-| `github_pr_list` | List PRs (open/closed/all) |
-| `github_pr_get` | PR details: body, diff stats, mergeable status |
-| `github_pr_comment` | Post a comment on a PR or issue |
-
-Set `GITHUB_TOKEN` in `gateway.yaml` (or as an env var) for private repos and higher rate limits.
-
-### Code Intelligence (`mcpx-code`)
-
-| Tool | Description | Requires Ollama |
-|---|---|---|
-| `code_search` | Full-text search across a codebase | no |
-| `code_find` | Locate a symbol by name — definition + signature + preview | no |
-| `code_callers` | Find all call sites of a function | no |
-| `code_deps` | Import list for a file or package | no |
-| `code_explain` | Explain a file:line range in plain English | yes |
-| `code_diff_review` | Review a diff for bugs and code smells | yes |
-
-See [docs/servers/mcpx-code.md](docs/servers/mcpx-code.md) for language support and Ollama setup.
+All tools are called via `call_tool(name="<tool>", args={...})`.
 
 ### Code Execution (`mcpx-exec`)
 
+| Tool | Mode | Description |
+|---|---|---|
+| `exec_run` | `cmd` + `workdir` | Run a project command (`go test ./...`, `make build`) with output filtering |
+| `exec_run` | `code` + `lang` | Run a code snippet in an isolated temp dir |
+| `exec_langs` | — | List available runtimes |
+
+**`filter` parameter:**
+- `filter=test` — strips passing tests, returns only failures + `N passed, M failed` summary
+- `filter=build` — strips warnings/notes, returns only error lines
+- `filter=none` — raw output capped at 8 KB (default)
+
+Supported snippet languages: `python`, `javascript`/`node`, `bash`, `go`, `ruby`, `php`.
+
+### Error Triage (`mcpx-debug`)
+
 | Tool | Description |
 |---|---|
-| `exec_run` | Run a code snippet — returns stdout, stderr, exit code |
-| `exec_langs` | List runtimes available on this machine |
+| `debug_analyze` | Analyze stacktrace, panic, log file, or stderr — filters noise, returns actionable summary |
 
-Supported languages: `python`, `javascript`/`node`, `bash`, `go`, `ruby`, `php`.
+**Inputs:** `input` (raw text) or `file` (path). Type and language auto-detected.
 
-Runs in an isolated temp directory with a configurable timeout (1–60s). Output is capped at 8 KB per stream to prevent token flooding.
+**Languages:** Go, Python, Node.js, Java, Rust.
 
-### Infrastructure (`mcpx-infra`)
+**Log formats:** plain text, JSON (`{"level":"error",...}`), structured key=value (logrus/zap/zerolog).
 
-| Tool | Description |
-|---|---|
-| `infra_targets` | List all auto-detected targets (local, SSH hosts, Kubernetes contexts) |
-| `infra_containers` | List Docker containers — status, image, ports |
-| `infra_container_logs` | Container logs, with optional error-only filtering |
-| `infra_container_stats` | One-shot CPU/memory snapshot for all containers |
-| `infra_compose` | List docker-compose stacks and service status |
-| `infra_services` | List systemd services — load/active/sub state |
-| `infra_service_logs` | Journald logs for a service, with error-only filtering |
-| `infra_disk` | Disk usage by mount point, sorted by usage % |
-| `infra_processes` | Top processes by CPU or memory |
-| `infra_pods` | List Kubernetes pods — status, restarts, age, node |
-| `infra_pod_logs` | Pod logs, with optional error-only filtering |
-| `infra_deployments` | List Kubernetes deployments — ready/desired replicas |
-| `infra_k8s_events` | Kubernetes warning events in a namespace |
-
-Targets are **auto-detected** — SSH hosts from `~/.ssh/config`, Kubernetes contexts from `~/.kube/config`. No extra config needed. Every tool has an optional `target` parameter; omit it to use the local machine (VM tools) or current context (k8s tools).
+Typical savings: 50-line Go panic → ~60 tokens (~88%). 500-line log file → ~150 tokens (~97%).
 
 ## Slash Commands
 
-Pre-built Claude Code slash commands live in `commands/mcpx/`. Copy them into your Claude config to enable `/mcpx:*` shortcuts:
-
 ```bash
-# Project-level (this repo only)
-cp -r commands/mcpx .claude/commands/
-
-# Global (all projects)
-cp -r commands/mcpx ~/.claude/commands/
+cp -r commands/mcpx ~/.claude/commands/   # global
 ```
 
 | Command | Example |
 |---|---|
-| `/mcpx:git` | `/mcpx:git show last 5 commits` |
-| `/mcpx:pr` | `/mcpx:pr list open PRs` |
-| `/mcpx:diff` | `/mcpx:diff what changed vs main` |
-| `/mcpx:blame` | `/mcpx:blame who wrote lines 10-30 in main.go` |
-| `/mcpx:branch` | `/mcpx:branch list branches` |
-| `/mcpx:exec` | `/mcpx:exec run this python snippet` |
-| `/mcpx:code` | `/mcpx:code find function parseConfig` |
-| `/mcpx:infra` | `/mcpx:infra why is the api container crashing on prod-vm` |
+| `/mcpx:exec` | `/mcpx:exec run tests in this project` |
+| `/mcpx:debug` | `/mcpx:debug analyze this panic output` |
+
+MCP Prompt versions (`/mcpx_exec`, `/mcpx_debug`) work in all clients that support `prompts/list`.
 
 ## Configuration
 
-The proxy reads `gateway.yaml` from the same directory as the binary (`bin/gateway.yaml`).
+`gateway.yaml` lives next to the proxy binary.
 
 ```yaml
 transport: stdio
@@ -198,76 +134,45 @@ port: 8080
 admin_port: 9090
 
 servers:
-  - name: git
-    transport: stdio
-    binary: mcpx-git
-
-  - name: code
-    transport: stdio
-    binary: mcpx-code
-    env:
-      OLLAMA_MODEL: qwen2.5-coder:7b   # optional — auto-detected if Ollama is running
-
   - name: exec
     transport: stdio
     binary: mcpx-exec
 
-  - name: infra
+  # Optional — add when needed:
+  # - name: git
+  #   transport: stdio
+  #   binary: mcpx-git
+  - name: debug
     transport: stdio
-    binary: mcpx-infra
-    # No env needed — SSH hosts auto-detected from ~/.ssh/config,
-    # Kubernetes contexts auto-detected from ~/.kube/config
+    binary: mcpx-debug
 ```
 
-### Per-server `env` block
-
-Any key under `env:` is injected into the server process environment. This is how Ollama config, GitHub tokens, and other per-server settings are passed without polluting the global environment.
-
-### `disabled:` flag
-
-Set `disabled: true` on any server to skip it at startup. Can be toggled live from the admin dashboard without restarting the proxy.
+Set `disabled: true` on any server to skip it at startup; toggle live from the admin dashboard.
 
 ## Admin Dashboard
 
-Available at `http://localhost:9090/ui` when the proxy is running.
+`http://localhost:9090/ui` — live call counts, token estimates, error rates, enable/disable per server.
 
-- Live call counts, token estimates, error rates per server
-- Per-server status: `ok` · `error` · `connecting` · `disabled`
-- Enable / Disable toggle — restarts a server subprocess without restarting the proxy
-
-API endpoints:
 ```
-GET  /api/status                    — JSON snapshot of all metrics
-POST /api/servers/{name}/disable    — disable a server
-POST /api/servers/{name}/enable     — re-enable a server
+GET  /api/status
+POST /api/servers/{name}/disable
+POST /api/servers/{name}/enable
 ```
 
 ## Development
 
 ```bash
-make test          # run tests for all modules
-make lint          # go vet + staticcheck
-make fmt           # gofmt in-place
-
-make test SERVER=git     # test a single module
-make test SERVER=exec
+make test
+make lint
+make fmt
 ```
-
-To run the proxy standalone (after building):
-```bash
-./bin/mcpx-proxy
-```
-
-To add a new domain server, create `servers/<name>/` with its own `go.mod` and `cmd/main.go`. The Makefile picks it up automatically.
 
 ## Docs
 
 | Doc | Description |
 |---|---|
-| [docs/client-setup.md](docs/client-setup.md) | Per-client setup: Claude Code, Cursor, Copilot, Windsurf, Zed, Antigravity |
-| [docs/servers/mcpx-git.md](docs/servers/mcpx-git.md) | Git server — tools, output format, GitHub auth |
-| [docs/servers/mcpx-code.md](docs/servers/mcpx-code.md) | Code server — tools, Ollama setup, language support |
-| [docs/servers/mcpx-exec.md](docs/servers/mcpx-exec.md) | Exec server — sandbox, supported languages, limits |
-| [docs/servers/mcpx-infra.md](docs/servers/mcpx-infra.md) | Infra server — Docker, systemd, disk, SSH remote access |
-| [docs/servers/README.md](docs/servers/README.md) | All servers index with port assignments |
-| [docs/architecture.md](docs/architecture.md) | Architectural decisions and design principles |
+| [docs/client-setup.md](docs/client-setup.md) | Per-client setup: Claude Code, Cursor, Copilot, Windsurf, Zed |
+| [docs/skills.md](docs/skills.md) | Skills (slash commands) — exec, debug |
+| [docs/servers/mcpx-exec.md](docs/servers/mcpx-exec.md) | Exec server — test/build filtering, sandbox, languages |
+| [docs/servers/mcpx-debug.md](docs/servers/mcpx-debug.md) | Debug server — stacktrace/panic/log triage, language support |
+| [docs/architecture.md](docs/architecture.md) | Architecture decisions and design principles |

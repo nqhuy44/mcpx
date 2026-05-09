@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"sort"
 	"strings"
 	"sync"
 
@@ -88,7 +89,6 @@ func (g *Gateway) initServer(ctx context.Context, sc config.ServerConfig, stats 
 }
 
 // DisableServer stops the named server and marks it disabled.
-// Tool calls to that server return a descriptive error until re-enabled.
 func (g *Gateway) DisableServer(name string) {
 	g.mu.Lock()
 	client, had := g.clients[name]
@@ -105,7 +105,6 @@ func (g *Gateway) DisableServer(name string) {
 }
 
 // EnableServer (re-)connects a previously disabled or failed server.
-// It re-uses the server config from gateway.yaml.
 func (g *Gateway) EnableServer(ctx context.Context, name string) error {
 	var sc config.ServerConfig
 	var found bool
@@ -154,24 +153,36 @@ func (g *Gateway) BuildMCPServer() *mcpserver.MCPServer {
 		mcpserver.WithPromptCapabilities(false),
 	)
 
-	// ── meta tools ────────────────────────────────────────────────────────────
+	// ── call_tool: universal dispatcher ──────────────────────────────────────
+	// Only tool the LLM needs to invoke any backend tool. Schemas are NOT loaded
+	// into the client context — the LLM learns tool names and args from the
+	// mcpx_usage prompt (injected at session start) or mcpx_guide.
+
+	s.AddTool(mcp.NewTool("call_tool",
+		mcp.WithDescription("Invoke any mcpx tool by name. Use mcpx_guide or search_tools to find tool names and args."),
+		mcp.WithString("name", mcp.Required(), mcp.Description("Tool name e.g. git, code, infra_vm")),
+		mcp.WithString("args", mcp.Description(`JSON args e.g. {"action":"log","n":5,"repo":"/path"}`)),
+	), g.handleCallTool)
+
+	// ── search_tools: discovery ───────────────────────────────────────────────
 
 	s.AddTool(mcp.NewTool("search_tools",
-		mcp.WithDescription("Search available tools by keyword. Returns top-3 matches with name, description, and input schema. Call this first when unsure which tool to use."),
+		mcp.WithDescription("Find a tool by keyword. Returns name, description, and schema. Then call it via call_tool."),
 		mcp.WithString("query", mcp.Required(), mcp.Description("Keywords to search for")),
 	), g.handleSearchTools)
 
+	// ── mcpx_guide: routing reference ────────────────────────────────────────
+
 	s.AddTool(mcp.NewTool("mcpx_guide",
-		mcp.WithDescription("Returns a concise routing guide: which mcpx tool to call for each type of developer task. Call this once at session start so you know when to use tools proactively."),
+		mcp.WithDescription("Full routing guide: all tool names and their args. Call once at session start."),
 	), func(_ context.Context, _ mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 		return mcp.NewToolResultText(usageGuide(g.reg.All())), nil
 	})
 
-	// ── MCP Prompts ──────────────────────────────────────────────────────────
-	// mcpx_usage: auto-injected session context by clients that call prompts/list
+	// ── mcpx_usage prompt: auto-injected at session start ─────────────────────
 
 	s.AddPrompt(mcp.NewPrompt("mcpx_usage",
-		mcp.WithPromptDescription("System context for mcpx: explains when to call each tool proactively. Clients that support MCP prompts should inject this at session start."),
+		mcp.WithPromptDescription("System context for mcpx: call_tool dispatch pattern and routing table. Injected at session start by clients that support MCP prompts."),
 	), func(_ context.Context, _ mcp.GetPromptRequest) (*mcp.GetPromptResult, error) {
 		return mcp.NewGetPromptResult(
 			"mcpx tool usage guide",
@@ -184,8 +195,7 @@ func (g *Gateway) BuildMCPServer() *mcpserver.MCPServer {
 		), nil
 	})
 
-	// per-skill prompts: invokable as slash commands in any client that supports prompts
-	// e.g. /mcpx_git, /mcpx_infra, /mcpx_code — each accepts an optional "request" argument
+	// per-skill prompts: slash commands for any client that supports prompts/list
 
 	for _, sk := range skills() {
 		sk := sk
@@ -203,55 +213,103 @@ func (g *Gateway) BuildMCPServer() *mcpserver.MCPServer {
 		})
 	}
 
-	// ── domain tool passthroughs ──────────────────────────────────────────────
-
-	for _, entry := range g.reg.All() {
-		g.registerPassthrough(s, entry)
-	}
-
 	g.mcpSrv = s
 	return s
 }
 
-// usageGuide builds a compact routing table from the live tool registry.
-// It is used by both the mcpx_guide tool and the mcpx_usage prompt.
+// handleCallTool dispatches a call_tool(name, args) request to the correct
+// backend server. args is a JSON object string; it is parsed and forwarded
+// as the tool's argument map.
+func (g *Gateway) handleCallTool(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+	name := req.GetString("name", "")
+	if name == "" {
+		return mcp.NewToolResultError("name is required"), nil
+	}
+
+	argsStr := req.GetString("args", "")
+	var args map[string]interface{}
+	if argsStr != "" {
+		if err := json.Unmarshal([]byte(argsStr), &args); err != nil {
+			return mcp.NewToolResultError("args must be valid JSON: " + err.Error()), nil
+		}
+	}
+
+	entry, ok := g.reg.Get(name)
+	if !ok {
+		matches := g.reg.Search(name, 3)
+		if len(matches) > 0 {
+			names := make([]string, len(matches))
+			for i, m := range matches {
+				names[i] = m.Name
+			}
+			return mcp.NewToolResultError("unknown tool: " + name + " — did you mean: " + strings.Join(names, ", ") + "? Call search_tools for more."), nil
+		}
+		return mcp.NewToolResultError("unknown tool: " + name + " — call search_tools(query) to discover available tools"), nil
+	}
+
+	stats := g.collector.Server(entry.ServerName)
+	if stats != nil && stats.GetStatus() == "disabled" {
+		return mcp.NewToolResultError("server '" + entry.ServerName + "' is disabled — enable it from the admin dashboard (/ui)"), nil
+	}
+
+	g.mu.RLock()
+	client, ok := g.clients[entry.ServerName]
+	g.mu.RUnlock()
+	if !ok {
+		return nil, fmt.Errorf("no client for server %q", entry.ServerName)
+	}
+
+	argsJSON, _ := json.Marshal(args)
+	tokIn := metrics.EstimateTokens(argsJSON)
+
+	result, err := client.CallTool(ctx, name, args)
+
+	var tokOut int64
+	if result != nil {
+		out, _ := json.Marshal(result.Content)
+		tokOut = metrics.EstimateTokens(out)
+	}
+
+	if stats != nil {
+		isError := err != nil || (result != nil && result.IsError)
+		stats.RecordCall(tokIn, tokOut, isError)
+	}
+
+	return result, err
+}
+
+// usageGuide builds a compact routing table. Shown via mcpx_guide and
+// injected as the mcpx_usage prompt — this replaces per-tool schema loading.
 func usageGuide(entries []*registry.ToolEntry) string {
-	// group tools by server
-	byServer := make(map[string][]string)
+	// group and sort tools by server, then by name within each server
+	byServer := make(map[string][]*registry.ToolEntry)
 	var order []string
 	for _, e := range entries {
 		if _, seen := byServer[e.ServerName]; !seen {
 			order = append(order, e.ServerName)
 		}
-		byServer[e.ServerName] = append(byServer[e.ServerName], e.Name)
+		byServer[e.ServerName] = append(byServer[e.ServerName], e)
+	}
+	sort.Strings(order)
+	for _, tools := range byServer {
+		sort.Slice(tools, func(i, j int) bool { return tools[i].Name < tools[j].Name })
 	}
 
 	var sb strings.Builder
 	sb.WriteString("# mcpx tool guide\n\n")
-	sb.WriteString("Use these tools proactively — prefer them over asking the user to run commands.\n\n")
-
-	// static routing hints per server
-	hints := map[string]string{
-		"git":   "commits, branches, diffs, blame, PRs — any git or GitHub question",
-		"code":  "symbol lookup, callers, imports, code explanation — any 'where is X' or 'explain this' question",
-		"exec":  "run/test a code snippet — any 'run this', 'what does this output', 'verify this' request",
-		"infra": "Docker containers, systemd services, disk usage, processes — any VM or server health question",
-	}
+	sb.WriteString("Invoke tools via: call_tool(name=\"<tool>\", args={...})\n")
+	sb.WriteString("Discover tools via: search_tools(query) — returns name, description, schema\n\n")
 
 	for _, srv := range order {
-		tools := byServer[srv]
-		hint := hints[srv]
-		if hint == "" {
-			hint = "see tool descriptions"
+		fmt.Fprintf(&sb, "## %s\n", srv)
+		for _, e := range byServer[srv] {
+			fmt.Fprintf(&sb, "- %s: %s\n", e.Name, e.Description)
 		}
-		fmt.Fprintf(&sb, "## %s\nUse when: %s\nTools: %s\n\n", srv, hint, strings.Join(tools, ", "))
+		sb.WriteString("\n")
 	}
 
-	sb.WriteString("## discovery\n")
-	sb.WriteString("Use when: unsure which tool fits\n")
-	sb.WriteString("Tools: search_tools(query), mcpx_guide\n\n")
 	sb.WriteString("---\n")
-	sb.WriteString("Rule: call search_tools(query) any time you are unsure. Never ask the user to run a command if a tool can do it.\n")
+	sb.WriteString("Rule: never ask the user to run a command if a tool can do it.\n")
 
 	return sb.String()
 }
@@ -269,52 +327,10 @@ func (g *Gateway) handleSearchTools(_ context.Context, req mcp.CallToolRequest) 
 
 	var sb strings.Builder
 	for i, e := range matches {
-		fmt.Fprintf(&sb, "[%d] %s | server:%s\n  desc: %s\n  schema: %s\n",
-			i+1, e.Name, e.ServerName, e.Description, string(e.InputSchema))
+		fmt.Fprintf(&sb, "[%d] %s | server:%s\n  desc: %s\n  schema: %s\n  invoke: call_tool(name=%q, args={...})\n",
+			i+1, e.Name, e.ServerName, e.Description, string(e.InputSchema), e.Name)
 	}
 	return mcp.NewToolResultText(sb.String()), nil
-}
-
-func (g *Gateway) registerPassthrough(s *mcpserver.MCPServer, entry *registry.ToolEntry) {
-	t := mcp.NewTool(entry.Name, mcp.WithDescription(entry.Description))
-
-	serverName := entry.ServerName
-	toolName := entry.Name
-	stats := g.collector.Server(serverName)
-
-	s.AddTool(t, func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
-		if stats != nil && stats.GetStatus() == "disabled" {
-			return mcp.NewToolResultError(
-				"server '" + serverName + "' is disabled — enable it from the admin dashboard (/ui)",
-			), nil
-		}
-
-		g.mu.RLock()
-		client, ok := g.clients[serverName]
-		g.mu.RUnlock()
-
-		if !ok {
-			return nil, fmt.Errorf("no client for server %q", serverName)
-		}
-
-		argsJSON, _ := json.Marshal(req.GetArguments())
-		tokIn := metrics.EstimateTokens(argsJSON)
-
-		result, err := client.CallTool(ctx, toolName, req.GetArguments())
-
-		var tokOut int64
-		if result != nil {
-			out, _ := json.Marshal(result.Content)
-			tokOut = metrics.EstimateTokens(out)
-		}
-
-		if stats != nil {
-			isError := err != nil || (result != nil && result.IsError)
-			stats.RecordCall(tokIn, tokOut, isError)
-		}
-
-		return result, err
-	})
 }
 
 func keywordsFrom(name, desc string) []string {

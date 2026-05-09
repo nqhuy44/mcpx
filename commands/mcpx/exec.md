@@ -1,15 +1,20 @@
-Execute a code snippet or shell command and return the output.
+Execute a shell command or code snippet and return filtered output.
 
 User request: $ARGUMENTS
 
-Use exec_run — not the native Bash tool — for:
-- Code snippets in any language (python, javascript, bash, go, ruby, php)
-- Shell commands with potentially large output: find, grep, cat large files, ps, df, docker ps
+Use exec_run for two cases:
+
+**1. Project commands (test/build)** — pass cmd + workdir + filter:
+- "run tests" → call_tool(name="exec_run", args={"cmd":"go test ./...","workdir":"<project_path>","filter":"test"})
+- "build" → call_tool(name="exec_run", args={"cmd":"make build","workdir":"<project_path>","filter":"build"})
+- filter=test returns only failing tests + summary (drops passing output)
+- filter=build returns only error lines (drops warnings)
+
+**2. Code snippets** — pass code + lang (isolated temp dir):
+- call_tool(name="exec_run", args={"code":"...","lang":"python"})
 
 Rules:
-- Call exec_langs first if the language is unclear
-- Default timeout 10s; raise to 30s for I/O-heavy or package-installing code
-- Pass stdin if the code reads from stdin
-- On non-zero exit: show stderr, explain the error, suggest a fix
-- Summarize large outputs — don't dump raw lines (exec_run caps at 8KB anyway)
-- Exception: use Bash for commands that need the project directory (make, git, go build) — exec_run runs in an isolated temp dir
+- Always pass workdir for project commands
+- Always use filter=test or filter=build — never dump raw test/build output
+- Default timeout 30s; raise to 60s for slow suites
+- On failure: read the error lines, explain root cause, suggest a fix
